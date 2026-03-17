@@ -5,8 +5,9 @@ data:
   val_frac: 0.15
 
 model:
-  name: mean_pool
+  name: attention_mil
   input_dim: 1024
+  attention_dim: 128
   hidden_dim: 256
   dropout: 0.1
 
@@ -19,4 +20,4 @@ training:
   seed: 42
 
 output:
-  dir: outputs/uni_mean
+  dir: outputs/uni_attention

@@ -16,7 +16,28 @@ from tqdm import tqdm
 from src.data.dataset import SurgenBagDataset
 from src.data.feature_provider import UniFeatureProvider
 from src.data.sampler import FullBagSampler, RandomPatchSampler
+from src.models.aggregators.attention_mil import AttentionMIL
 from src.models.aggregators.mean_pool import MeanPoolMIL
+
+
+def build_model(cfg):
+    model_name = cfg["model"]["name"]
+
+    if model_name == "mean_pool":
+        return MeanPoolMIL(
+            input_dim=cfg["model"]["input_dim"],
+            hidden_dim=cfg["model"]["hidden_dim"],
+            dropout=cfg["model"]["dropout"],
+        )
+    elif model_name == "attention_mil":
+        return AttentionMIL(
+            input_dim=cfg["model"]["input_dim"],
+            attention_dim=cfg["model"]["attention_dim"],
+            hidden_dim=cfg["model"]["hidden_dim"],
+            dropout=cfg["model"]["dropout"],
+        )
+    else:
+        raise ValueError(f"Unknown model: {model_name}")
 
 
 def set_seed(seed: int) -> None:
@@ -142,12 +163,7 @@ def main():
 
     provider, train_loader, val_loader, test_loader, train_idx, val_idx, test_idx = build_loaders(cfg)
 
-    input_dim = cfg["model"]["input_dim"]
-    model = MeanPoolMIL(
-        input_dim=input_dim,
-        hidden_dim=cfg["model"]["hidden_dim"],
-        dropout=cfg["model"]["dropout"],
-    ).to(device)
+    model = build_model(cfg).to(device)
 
     train_labels = [provider.get_record(i).label for i in train_idx]
     n_pos = sum(train_labels)
