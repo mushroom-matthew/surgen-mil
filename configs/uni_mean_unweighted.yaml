@@ -16,7 +16,7 @@ optimizer:
 
 loss:
   name: bce
-  weighted: true
+  weighted: false
 
 training:
   epochs: 15
@@ -25,4 +25,4 @@ training:
   selection_metric: val_auprc
 
 output:
-  dir: outputs/uni_mean
+  dir: outputs/uni_mean_unweighted

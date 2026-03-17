@@ -6,6 +6,7 @@ import random
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import yaml
@@ -16,6 +17,7 @@ from tqdm import tqdm
 from src.data.dataset import SurgenBagDataset
 from src.data.feature_provider import UniFeatureProvider
 from src.data.sampler import FullBagSampler, RandomPatchSampler
+from src.losses import build_loss
 from src.models.aggregators.attention_mil import AttentionMIL
 from src.models.aggregators.mean_pool import MeanPoolMIL
 
@@ -120,10 +122,9 @@ def build_loaders(cfg):
 
 
 @torch.no_grad()
-def evaluate(model, loader, device):
+def evaluate(model, loader, device, split: str = ""):
     model.eval()
-    y_true = []
-    y_score = []
+    rows = []
 
     for batch in loader:
         x = batch["features"].to(device)
@@ -133,16 +134,25 @@ def evaluate(model, loader, device):
         logit = out["logit"].view(())
         prob = torch.sigmoid(logit).item()
 
-        y_true.append(int(y.item()))
-        y_score.append(prob)
+        rows.append({
+            "slide_id": batch["slide_id"],
+            "label": int(y.item()),
+            "prob": prob,
+            "split": split,
+        })
+
+    y_true = [r["label"] for r in rows]
+    y_score = [r["prob"] for r in rows]
 
     if len(set(y_true)) < 2:
-        return {"auroc": None, "auprc": None}
+        metrics = {"auroc": None, "auprc": None}
+    else:
+        metrics = {
+            "auroc": float(roc_auc_score(y_true, y_score)),
+            "auprc": float(average_precision_score(y_true, y_score)),
+        }
 
-    return {
-        "auroc": float(roc_auc_score(y_true, y_score)),
-        "auprc": float(average_precision_score(y_true, y_score)),
-    }
+    return metrics, rows
 
 
 def main():
@@ -168,18 +178,28 @@ def main():
     train_labels = [provider.get_record(i).label for i in train_idx]
     n_pos = sum(train_labels)
     n_neg = len(train_labels) - n_pos
-    pos_weight = torch.tensor([n_neg / max(n_pos, 1)], dtype=torch.float32, device=device)
-    print(f"Train positives: {n_pos}, negatives: {n_neg}, pos_weight: {pos_weight.item():.3f}")
 
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    loss_cfg = cfg.get("loss", {"name": "bce", "weighted": True})
+    if loss_cfg.get("weighted", False):
+        pos_weight = torch.tensor([n_neg / max(n_pos, 1)], dtype=torch.float32, device=device)
+        print(f"Train positives: {n_pos}, negatives: {n_neg}, pos_weight: {pos_weight.item():.3f}")
+    else:
+        pos_weight = None
+        print(f"Train positives: {n_pos}, negatives: {n_neg}")
+    criterion = build_loss(loss_cfg, device, pos_weight=pos_weight)
+    print(f"Loss: {loss_cfg['name']}")
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=cfg["optimizer"]["lr"],
         weight_decay=cfg["optimizer"]["weight_decay"],
     )
 
-    best_val_auprc = -1.0
+    patience = cfg["training"].get("early_stopping_patience", None)
+    selection_metric = cfg["training"].get("selection_metric", "val_auprc")
+
+    best_val_metric = -1.0
     best_state = None
+    epochs_without_improvement = 0
     history = []
 
     for epoch in range(1, cfg["training"]["epochs"] + 1):
@@ -202,7 +222,7 @@ def main():
             pbar.set_postfix(loss=f"{loss.item():.4f}")
 
         train_loss = epoch_loss / max(len(train_loader), 1)
-        val_metrics = evaluate(model, val_loader, device)
+        val_metrics, _ = evaluate(model, val_loader, device, split="val")
 
         record = {
             "epoch": epoch,
@@ -213,15 +233,28 @@ def main():
         history.append(record)
         print(record)
 
-        val_auprc = val_metrics["auprc"]
-        if val_auprc is not None and val_auprc > best_val_auprc:
-            best_val_auprc = val_auprc
+        current_metric = val_metrics.get(selection_metric.replace("val_", ""))
+        if current_metric is not None and current_metric > best_val_metric:
+            best_val_metric = current_metric
             best_state = {k: v.cpu() for k, v in model.state_dict().items()}
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
 
+        if patience is not None and epochs_without_improvement >= patience:
+            print(f"Early stopping at epoch {epoch} (no improvement in {selection_metric} for {patience} epochs)")
+            break
+
+    print(f"Best {selection_metric}: {best_val_metric:.4f} — loading best checkpoint")
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    test_metrics = evaluate(model, test_loader, device)
+    all_preds = []
+    test_metrics, test_rows = evaluate(model, test_loader, device, split="test")
+    _, val_rows = evaluate(model, val_loader, device, split="val")
+    _, train_rows = evaluate(model, train_loader, device, split="train")
+    all_preds = train_rows + val_rows + test_rows
+
     print("Test metrics:", test_metrics)
 
     torch.save(model.state_dict(), out_dir / "model.pt")
@@ -229,6 +262,8 @@ def main():
         json.dump(history, f, indent=2)
     with open(out_dir / "metrics.json", "w") as f:
         json.dump({"test": test_metrics}, f, indent=2)
+    pd.DataFrame(all_preds).to_csv(out_dir / "predictions.csv", index=False)
+    print(f"Predictions saved to {out_dir / 'predictions.csv'}")
 
 
 if __name__ == "__main__":

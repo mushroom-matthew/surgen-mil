@@ -10,13 +10,17 @@ model:
   hidden_dim: 256
   dropout: 0.1
 
+loss:
+  name: bce_focal
+  weighted: true
+  alpha: 0.5
+  gamma: 2.0
+  lam_bce: 0.5
+  lam_focal: 0.5
+
 optimizer:
   lr: 0.0001
   weight_decay: 0.0001
-
-loss:
-  name: bce
-  weighted: true
 
 training:
   epochs: 15
@@ -25,4 +29,4 @@ training:
   selection_metric: val_auprc
 
 output:
-  dir: outputs/uni_mean
+  dir: outputs/uni_mean_bce_focal
