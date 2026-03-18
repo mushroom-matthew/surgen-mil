@@ -17,29 +17,9 @@ from tqdm import tqdm
 from src.data.dataset import SurgenBagDataset
 from src.data.feature_provider import UniFeatureProvider
 from src.data.sampler import FullBagSampler, RandomPatchSampler
+from src.data.splits import case_grouped_stratified_split
 from src.losses import build_loss
-from src.models.aggregators.attention_mil import AttentionMIL
-from src.models.aggregators.mean_pool import MeanPoolMIL
-
-
-def build_model(cfg):
-    model_name = cfg["model"]["name"]
-
-    if model_name == "mean_pool":
-        return MeanPoolMIL(
-            input_dim=cfg["model"]["input_dim"],
-            hidden_dim=cfg["model"]["hidden_dim"],
-            dropout=cfg["model"]["dropout"],
-        )
-    elif model_name == "attention_mil":
-        return AttentionMIL(
-            input_dim=cfg["model"]["input_dim"],
-            attention_dim=cfg["model"]["attention_dim"],
-            hidden_dim=cfg["model"]["hidden_dim"],
-            dropout=cfg["model"]["dropout"],
-        )
-    else:
-        raise ValueError(f"Unknown model: {model_name}")
+from src.models.build import build_model
 
 
 def set_seed(seed: int) -> None:
@@ -54,44 +34,14 @@ def collate_one(batch):
     return batch[0]
 
 
-def stratified_split(indices, labels, train_frac=0.7, val_frac=0.15, seed=42):
-    rng = np.random.default_rng(seed)
-    pos = [i for i, y in zip(indices, labels) if y == 1]
-    neg = [i for i, y in zip(indices, labels) if y == 0]
-
-    rng.shuffle(pos)
-    rng.shuffle(neg)
-
-    def split_group(group):
-        n = len(group)
-        n_train = int(round(train_frac * n))
-        n_val = int(round(val_frac * n))
-        train = group[:n_train]
-        val = group[n_train:n_train + n_val]
-        test = group[n_train + n_val:]
-        return train, val, test
-
-    pos_tr, pos_val, pos_te = split_group(pos)
-    neg_tr, neg_val, neg_te = split_group(neg)
-
-    train_idx = pos_tr + neg_tr
-    val_idx = pos_val + neg_val
-    test_idx = pos_te + neg_te
-
-    rng.shuffle(train_idx)
-    rng.shuffle(val_idx)
-    rng.shuffle(test_idx)
-    return train_idx, val_idx, test_idx
-
 
 def build_loaders(cfg):
     provider = UniFeatureProvider(cfg["data"]["root"])
     all_indices = list(range(len(provider)))
-    all_labels = [provider.get_record(i).label for i in all_indices]
 
-    train_idx, val_idx, test_idx = stratified_split(
+    train_idx, val_idx, test_idx = case_grouped_stratified_split(
+        provider,
         all_indices,
-        all_labels,
         train_frac=cfg["data"].get("train_frac", 0.7),
         val_frac=cfg["data"].get("val_frac", 0.15),
         seed=cfg["training"]["seed"],
@@ -122,17 +72,18 @@ def build_loaders(cfg):
 
 
 @torch.no_grad()
-def evaluate(model, loader, device, split: str = ""):
+def evaluate(model, loader, device, split: str = "", temperature: float = 1.0):
     model.eval()
     rows = []
 
     for batch in loader:
         x = batch["features"].to(device)
         y = batch["label"].to(device)
+        coords = batch["coords"].to(device)
 
-        out = model(x)
+        out = model(x, coords=coords)
         logit = out["logit"].view(())
-        prob = torch.sigmoid(logit).item()
+        prob = torch.sigmoid(logit / temperature).item()
 
         rows.append({
             "slide_id": batch["slide_id"],
@@ -153,6 +104,33 @@ def evaluate(model, loader, device, split: str = ""):
         }
 
     return metrics, rows
+
+
+@torch.no_grad()
+def _collect_logits(model, loader, device):
+    model.eval()
+    logits, labels = [], []
+    for batch in loader:
+        x = batch["features"].to(device)
+        coords = batch["coords"].to(device)
+        out = model(x, coords=coords)
+        logits.append(out["logit"].view(()).cpu().item())
+        labels.append(float(batch["label"].item()))
+    return torch.tensor(logits), torch.tensor(labels)
+
+
+def find_temperature(model, loader, device) -> float:
+    """Find scalar temperature T that minimises NLL on the given loader."""
+    from scipy.optimize import minimize_scalar
+
+    logits, labels = _collect_logits(model, loader, device)
+
+    def nll(t):
+        probs = torch.sigmoid(logits / max(float(t), 1e-6))
+        return torch.nn.functional.binary_cross_entropy(probs, labels).item()
+
+    result = minimize_scalar(nll, bounds=(0.1, 10.0), method="bounded")
+    return float(result.x)
 
 
 def main():
@@ -205,14 +183,17 @@ def main():
     for epoch in range(1, cfg["training"]["epochs"] + 1):
         model.train()
         epoch_loss = 0.0
+        if hasattr(criterion, "set_epoch"):
+            criterion.set_epoch(epoch)
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}", leave=True)
 
         for batch in pbar:
             x = batch["features"].to(device)
             y = batch["label"].to(device)
+            coords = batch["coords"].to(device)
 
             optimizer.zero_grad()
-            out = model(x)
+            out = model(x, coords=coords)
             logit = out["logit"].view(())
             loss = criterion(logit.unsqueeze(0), y.unsqueeze(0))
             loss.backward()
@@ -249,19 +230,21 @@ def main():
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    all_preds = []
-    test_metrics, test_rows = evaluate(model, test_loader, device, split="test")
-    _, val_rows = evaluate(model, val_loader, device, split="val")
-    _, train_rows = evaluate(model, train_loader, device, split="train")
+    temperature = find_temperature(model, val_loader, device)
+    print(f"Temperature (val): {temperature:.4f}")
+
+    test_metrics, test_rows = evaluate(model, test_loader, device, split="test", temperature=temperature)
+    _, val_rows   = evaluate(model, val_loader,  device, split="val",   temperature=temperature)
+    _, train_rows = evaluate(model, train_loader, device, split="train", temperature=temperature)
     all_preds = train_rows + val_rows + test_rows
 
-    print("Test metrics:", test_metrics)
+    print("Test metrics (temperature-scaled):", test_metrics)
 
     torch.save(model.state_dict(), out_dir / "model.pt")
     with open(out_dir / "history.json", "w") as f:
         json.dump(history, f, indent=2)
     with open(out_dir / "metrics.json", "w") as f:
-        json.dump({"test": test_metrics}, f, indent=2)
+        json.dump({"test": test_metrics, "temperature": temperature}, f, indent=2)
     pd.DataFrame(all_preds).to_csv(out_dir / "predictions.csv", index=False)
     print(f"Predictions saved to {out_dir / 'predictions.csv'}")
 

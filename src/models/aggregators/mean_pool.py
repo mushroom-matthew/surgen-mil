@@ -14,14 +14,9 @@ class MeanPoolMIL(nn.Module):
             nn.Linear(hidden_dim, 1),
         )
 
-    def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(self, x: torch.Tensor, coords=None) -> dict[str, torch.Tensor]:
         """
         x: [N, D] patch embeddings for one slide
-        returns:
-            {
-                "logit": [1],
-                "slide_embedding": [D],
-            }
         """
         slide_embedding = x.mean(dim=0)
         logit = self.classifier(slide_embedding).squeeze(-1)

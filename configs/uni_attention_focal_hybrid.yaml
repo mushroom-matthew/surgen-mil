@@ -1,0 +1,33 @@
+data:
+  root: /mnt/data-surgen
+  max_patches: 512
+  train_frac: 0.7
+  val_frac: 0.15
+
+model:
+  name: attention_mil
+  input_dim: 1024
+  attention_dim: 128
+  hidden_dim: 256
+  dropout: 0.1
+
+optimizer:
+  lr: 0.0001
+  weight_decay: 0.0001
+
+loss:
+  name: bce_focal
+  weighted: true
+  alpha: 0.5
+  gamma: 2.0
+  lam_bce: 0.5
+  lam_focal: 0.5
+
+training:
+  epochs: 15
+  seed: 42
+  early_stopping_patience: 3
+  selection_metric: val_auprc
+
+output:
+  dir: outputs/uni_attention_focal_hybrid

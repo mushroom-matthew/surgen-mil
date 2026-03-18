@@ -29,24 +29,38 @@ from sklearn.metrics import (
 # ---------------------------------------------------------------------------
 
 RUNS = {
-    "Mean Pool (weighted BCE)": "outputs/uni_mean",
-    "Attention MIL (weighted BCE)": "outputs/uni_attention",
-    "Mean Pool (unweighted BCE)": "outputs/uni_mean_unweighted",
-    "Mean Pool (focal)": "outputs/uni_mean_focal",
-    "Mean Pool (BCE + focal)": "outputs/uni_mean_bce_focal",
+    # Phase A: attention architecture comparison
+    "Mean Pool":                      "outputs/uni_mean",
+    "Attention MIL":                  "outputs/uni_attention",
+    "Gated Attention MIL":            "outputs/uni_gated_attention",
+    # Phase B: spatial hierarchy
+    "Region Attention (8×8)":         "outputs/uni_region_attention_8",
+    "Region Attention (16×16)":       "outputs/uni_region_attention_16",
+    # Previous aggregation experiments (comment in/out as needed)
+    # "Mean+Var Pool":                "outputs/uni_mean_var",
+    # "Instance MLP + Mean":          "outputs/uni_instance_mean",
+    # "LSE Pool (τ=2)":               "outputs/uni_lse_tau2",
 }
 
 # Short keys used in the combined predictions export
 RUN_KEYS = {
-    "Mean Pool (weighted BCE)": "mean_weighted",
-    "Attention MIL (weighted BCE)": "attention_weighted",
-    "Mean Pool (unweighted BCE)": "mean_unweighted",
-    "Mean Pool (focal)": "mean_focal",
-    "Mean Pool (BCE + focal)": "mean_bce_focal",
+    "Mean Pool":                      "mean_weighted",
+    "Attention MIL":                  "attention_weighted",
+    "Gated Attention MIL":            "gated_attention",
+    "Region Attention (8×8)":         "region_attention_8",
+    "Region Attention (16×16)":       "region_attention_16",
+    "Mean+Var Pool":                  "mean_var",
+    "Instance MLP + Mean":            "instance_mean",
+    "LSE Pool (τ=2)":                "lse_tau2",
+    "LSE Pool (τ=5)":                "lse_tau5",
+    "LSE Pool (τ=10)":               "lse_tau10",
+    "Attention MIL (focal)":          "attention_focal",
+    "Attention MIL (norm. hybrid)":   "attention_normalized",
+    "Attention MIL (curr. hybrid)":   "attention_curriculum",
 }
 
-COLORS = ["#2196F3", "#F44336", "#4CAF50", "#FF9800", "#9C27B0"]
-MARKERS = ["o", "s", "^", "D", "v"]
+COLORS  = ["#2196F3", "#F44336", "#4CAF50", "#9C27B0", "#FF9800", "#00BCD4", "#E91E63", "#795548"]
+MARKERS = ["o",       "s",       "^",       "D",       "v",       "P",       "X",       "*"]
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +265,11 @@ def plot_confusion_matrices(
         y_pred = (sub["prob"].values >= threshold).astype(int)
         cm = confusion_matrix(y_true, y_pred)
 
-        im = ax.imshow(cm, interpolation="nearest", cmap="Blues")
+        # Normalise by row (true class) so color encodes within-class rate
+        row_sums = cm.sum(axis=1, keepdims=True)
+        cm_norm = cm / np.where(row_sums == 0, 1, row_sums)
+
+        ax.imshow(cm_norm, interpolation="nearest", cmap="Blues", vmin=0, vmax=1)
         ax.set_title(f"{name}\n(threshold={threshold})", fontsize=9)
         ax.set_xlabel("Predicted")
         ax.set_ylabel("True")
@@ -262,10 +280,10 @@ def plot_confusion_matrices(
 
         for i in range(cm.shape[0]):
             for j in range(cm.shape[1]):
-                ax.text(j, i, str(cm[i, j]),
+                ax.text(j, i, f"{cm[i, j]}\n({cm_norm[i, j]:.0%})",
                         ha="center", va="center",
-                        color="white" if cm[i, j] > cm.max() / 2 else "black",
-                        fontsize=14, fontweight="bold")
+                        color="white" if cm_norm[i, j] > 0.5 else "black",
+                        fontsize=11, fontweight="bold")
 
     fig.suptitle(f"Confusion matrices ({split})", fontsize=13, y=1.02)
     fig.tight_layout()
@@ -313,7 +331,9 @@ def plot_cohort_breakdown(
         axes = [axes]
 
     x = np.arange(len(cohorts))
-    width = 0.25
+    n_runs = len(run_preds)
+    width = 0.7 / n_runs
+    offsets = np.arange(n_runs) * width - (n_runs - 1) * width / 2
 
     for ax, metric in zip(axes, metric_names):
         for i, (run_name, color) in enumerate(zip(run_preds, COLORS)):
@@ -325,12 +345,12 @@ def plot_cohort_breakdown(
                     (result["metric"] == metric)
                 ]
                 vals.append(row["value"].values[0] if not row.empty else 0.0)
-            bars = ax.bar(x + i * width, vals, width, label=run_name, color=color, alpha=0.85)
+            bars = ax.bar(x + offsets[i], vals, width, label=run_name, color=color, alpha=0.85)
             for bar, val in zip(bars, vals):
                 ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
                         f"{val:.3f}", ha="center", va="bottom", fontsize=7)
 
-        ax.set_xticks(x + width)
+        ax.set_xticks(x)
         ax.set_xticklabels(cohorts)
         ax.set_ylim(0, 1.1)
         ax.set_ylabel(metric)
@@ -469,6 +489,162 @@ def print_top_errors(
 
 
 # ---------------------------------------------------------------------------
+# Plot 8: Operating-point analysis — annotated threshold at 90% sens + best F1
+# ---------------------------------------------------------------------------
+
+def _threshold_metrics(y_true: np.ndarray, y_score: np.ndarray, n: int = 500):
+    """Return arrays of (threshold, sens, spec, prec, f1) over n steps."""
+    thresholds = np.linspace(0, 1, n)
+    rows = []
+    for t in thresholds:
+        y_pred = (y_score >= t).astype(int)
+        tp = ((y_pred == 1) & (y_true == 1)).sum()
+        tn = ((y_pred == 0) & (y_true == 0)).sum()
+        fp = ((y_pred == 1) & (y_true == 0)).sum()
+        fn = ((y_pred == 0) & (y_true == 1)).sum()
+        sens = tp / max(tp + fn, 1)
+        spec = tn / max(tn + fp, 1)
+        prec = tp / max(tp + fp, 1)
+        f1 = 2 * prec * sens / max(prec + sens, 1e-9)
+        rows.append((t, sens, spec, prec, f1))
+    return np.array(rows)  # [N, 5]
+
+
+def find_operating_points(y_true: np.ndarray, y_score: np.ndarray) -> dict:
+    """Return threshold, sens, spec, prec, F1 at two operating points."""
+    m = _threshold_metrics(y_true, y_score)
+    # ~90% sensitivity: find threshold where sens is closest to 0.90
+    idx_sens90 = int(np.argmin(np.abs(m[:, 1] - 0.90)))
+    # best F1
+    idx_f1 = int(np.argmax(m[:, 4]))
+    def row(i):
+        return {
+            "threshold": float(m[i, 0]),
+            "sensitivity": float(m[i, 1]),
+            "specificity": float(m[i, 2]),
+            "precision": float(m[i, 3]),
+            "f1": float(m[i, 4]),
+        }
+    return {"sens90": row(idx_sens90), "best_f1": row(idx_f1)}
+
+
+def plot_threshold_analysis(
+    run_preds: dict[str, pd.DataFrame],
+    split: str,
+    out: Path,
+) -> None:
+    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(13, 5))
+
+    op_records = []
+    for (name, df), color, marker in zip(run_preds.items(), COLORS, MARKERS):
+        sub = split_df(df, split)
+        if sub.empty or sub["label"].nunique() < 2:
+            continue
+        y_true = sub["label"].values
+        y_score = sub["prob"].values
+        m = _threshold_metrics(y_true, y_score)
+        ops = find_operating_points(y_true, y_score)
+
+        # sensitivity + specificity curves
+        ax_left.plot(m[:, 0], m[:, 1], color=color, lw=1.5, label=f"{name} sens")
+        ax_left.plot(m[:, 0], m[:, 2], color=color, lw=1.5, linestyle="--")
+
+        # F1 curve
+        ax_right.plot(m[:, 0], m[:, 4], color=color, lw=1.5, label=name)
+
+        # annotate operating points
+        for op_name, op, ls in [("90% sens", ops["sens90"], "v"), ("best F1", ops["best_f1"], "*")]:
+            t, s = op["threshold"], op["sensitivity"]
+            ax_left.axvline(t, color=color, alpha=0.35, linestyle=":")
+            ax_left.plot(t, s, marker=ls, color=color, ms=9, zorder=5)
+            ax_right.plot(t, op["f1"], marker=ls, color=color, ms=9, zorder=5,
+                          label=f"{name} {op_name} (t={t:.2f}, F1={op['f1']:.2f})")
+            op_records.append({
+                "model": name, "operating_point": op_name, **op
+            })
+
+    from matplotlib.lines import Line2D
+    ax_left.add_artist(ax_left.legend(
+        handles=[
+            Line2D([0], [0], color="k", lw=1.5, label="Sensitivity"),
+            Line2D([0], [0], color="k", lw=1.5, linestyle="--", label="Specificity"),
+        ],
+        loc="lower left", fontsize=8,
+    ))
+    ax_left.legend(
+        [Line2D([0], [0], color=c, lw=1.5) for c in COLORS[:len(run_preds)]],
+        list(run_preds.keys()), fontsize=7, loc="center left",
+    )
+    ax_left.set_xlabel("Threshold")
+    ax_left.set_ylabel("Rate")
+    ax_left.set_title(f"Sensitivity & Specificity ({split})", fontsize=11)
+    ax_left.grid(True, alpha=0.3)
+
+    ax_right.set_xlabel("Threshold")
+    ax_right.set_ylabel("F1")
+    ax_right.set_title(f"F1 vs Threshold — annotated operating points ({split})", fontsize=11)
+    ax_right.legend(fontsize=7)
+    ax_right.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    _save(fig, out)
+
+    # print operating-point table
+    print(f"\n=== Operating Points ({split}) ===")
+    op_df = pd.DataFrame(op_records).round(3)
+    print(op_df.to_string(index=False))
+
+
+# ---------------------------------------------------------------------------
+# Table: systematic errors — slides that fail across both models
+# ---------------------------------------------------------------------------
+
+def print_systematic_errors(
+    run_preds: dict[str, pd.DataFrame],
+    split: str,
+    threshold: float = 0.5,
+) -> None:
+    model_names = list(run_preds.keys())
+    if len(model_names) < 2:
+        return
+
+    dfs = {
+        name: split_df(df, split).set_index("slide_id")
+        for name, df in run_preds.items()
+    }
+
+    # union of all slides
+    all_slides = set(dfs[model_names[0]].index)
+    for df in dfs.values():
+        all_slides &= set(df.index)
+
+    fp_sets = {}
+    fn_sets = {}
+    for name, df in dfs.items():
+        sub = df.loc[list(all_slides)]
+        fp_sets[name] = set(sub[(sub["label"] == 0) & (sub["prob"] >= threshold)].index)
+        fn_sets[name] = set(sub[(sub["label"] == 1) & (sub["prob"] < threshold)].index)
+
+    common_fps = set.intersection(*fp_sets.values())
+    common_fns = set.intersection(*fn_sets.values())
+
+    print(f"\n=== Systematic Errors — consistent across all models ({split}, t={threshold}) ===")
+
+    ref_df = dfs[model_names[0]]
+    print(f"\nFalse Positives in ALL models ({len(common_fps)} slides):")
+    for sid in sorted(common_fps):
+        cohort = extract_cohort(sid)
+        probs = "  ".join(f"{n}: {dfs[n].loc[sid, 'prob']:.3f}" for n in model_names)
+        print(f"  {sid}  cohort={cohort}  [{probs}]")
+
+    print(f"\nFalse Negatives in ALL models ({len(common_fns)} slides):")
+    for sid in sorted(common_fns):
+        cohort = extract_cohort(sid)
+        probs = "  ".join(f"{n}: {dfs[n].loc[sid, 'prob']:.3f}" for n in model_names)
+        print(f"  {sid}  cohort={cohort}  [{probs}]")
+
+
+# ---------------------------------------------------------------------------
 # Table: summary
 # ---------------------------------------------------------------------------
 
@@ -546,7 +722,10 @@ def main():
     print("\nExporting combined predictions...")
     export_combined_predictions(run_preds, out)
 
+    plot_threshold_analysis(run_preds, split, out / "threshold_analysis.png")
+
     print_top_errors(run_preds, split, k=10)
+    print_systematic_errors(run_preds, split, threshold=0.5)
 
     summary = print_summary_table(run_preds, run_histories)
     summary.to_csv(out / "summary.csv", index=False)

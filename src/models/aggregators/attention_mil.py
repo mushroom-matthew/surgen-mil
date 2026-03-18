@@ -27,7 +27,7 @@ class AttentionMIL(nn.Module):
             nn.Linear(hidden_dim, 1),
         )
 
-    def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(self, x: torch.Tensor, coords=None) -> dict[str, torch.Tensor]:
         """
         x: [N, D]
         """

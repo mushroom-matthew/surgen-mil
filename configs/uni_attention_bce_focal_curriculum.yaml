@@ -1,0 +1,35 @@
+data:
+  root: /mnt/data-surgen
+  max_patches: 512
+  train_frac: 0.7
+  val_frac: 0.15
+
+model:
+  name: attention_mil
+  input_dim: 1024
+  attention_dim: 128
+  hidden_dim: 256
+  dropout: 0.1
+
+loss:
+  name: bce_focal_curriculum
+  weighted: true
+  alpha: 0.5
+  gamma: 2.0
+  schedule:
+    - [3,  0.8]   # epochs 1-3:  80% BCE, 20% focal
+    - [8,  0.5]   # epochs 4-8:  50/50
+    - [999, 0.3]  # epochs 9+:   30% BCE, 70% focal
+
+optimizer:
+  lr: 0.0001
+  weight_decay: 0.0001
+
+training:
+  epochs: 15
+  seed: 42
+  early_stopping_patience: 3
+  selection_metric: val_auprc
+
+output:
+  dir: outputs/uni_attention_bce_focal_curriculum
