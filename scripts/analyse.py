@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -29,17 +30,27 @@ from sklearn.metrics import (
 # ---------------------------------------------------------------------------
 
 RUNS = {
-    # Phase A: attention architecture comparison
+    # Baselines
     "Mean Pool":                      "outputs/uni_mean",
     "Attention MIL":                  "outputs/uni_attention",
     "Gated Attention MIL":            "outputs/uni_gated_attention",
-    # Phase B: spatial hierarchy
-    "Region Attention (8×8)":         "outputs/uni_region_attention_8",
-    "Region Attention (16×16)":       "outputs/uni_region_attention_16",
-    # Previous aggregation experiments (comment in/out as needed)
+    # Top-k sparse attention sweep
+    "Top-k (k=4)":                    "outputs/uni_topk_attention_k4",
+    "Top-k (k=8)":                    "outputs/uni_topk_attention_k8",
+    "Top-k (k=16)":                   "outputs/uni_topk_attention_k16",
+    "Top-k (k=32)":                   "outputs/uni_topk_attention_k32",
+    # Previous architecture comparisons (Phase A / B)
+    
+    # "Region Attention (8×8)":       "outputs/uni_region_attention_8",
+    # "Region Attention (16×16)":     "outputs/uni_region_attention_16",
+    # Previous aggregation experiments
     # "Mean+Var Pool":                "outputs/uni_mean_var",
     # "Instance MLP + Mean":          "outputs/uni_instance_mean",
     # "LSE Pool (τ=2)":               "outputs/uni_lse_tau2",
+    # Loss ablations
+    # "Attention MIL (focal)":        "outputs/uni_attention_focal",
+    # "Attention MIL (norm. hybrid)": "outputs/uni_attention_bce_focal_normalized",
+    # "Attention MIL (curr. hybrid)": "outputs/uni_attention_bce_focal_curriculum",
 }
 
 # Short keys used in the combined predictions export
@@ -47,16 +58,21 @@ RUN_KEYS = {
     "Mean Pool":                      "mean_weighted",
     "Attention MIL":                  "attention_weighted",
     "Gated Attention MIL":            "gated_attention",
-    "Region Attention (8×8)":         "region_attention_8",
-    "Region Attention (16×16)":       "region_attention_16",
-    "Mean+Var Pool":                  "mean_var",
-    "Instance MLP + Mean":            "instance_mean",
-    "LSE Pool (τ=2)":                "lse_tau2",
-    "LSE Pool (τ=5)":                "lse_tau5",
-    "LSE Pool (τ=10)":               "lse_tau10",
-    "Attention MIL (focal)":          "attention_focal",
-    "Attention MIL (norm. hybrid)":   "attention_normalized",
-    "Attention MIL (curr. hybrid)":   "attention_curriculum",
+    "Top-k (k=4)":                    "topk_k4",
+    "Top-k (k=8)":                    "topk_k8",
+    "Top-k (k=16)":                   "topk_k16",
+    "Top-k (k=32)":                   "topk_k32",
+    # Previous runs
+    # "Region Attention (8×8)":       "region_attention_8",
+    # "Region Attention (16×16)":     "region_attention_16",
+    # "Mean+Var Pool":                "mean_var",
+    # "Instance MLP + Mean":          "instance_mean",
+    # "LSE Pool (τ=2)":               "lse_tau2",
+    # "LSE Pool (τ=5)":               "lse_tau5",
+    # "LSE Pool (τ=10)":              "lse_tau10",
+    # "Attention MIL (focal)":        "attention_focal",
+    # "Attention MIL (norm. hybrid)": "attention_normalized",
+    # "Attention MIL (curr. hybrid)": "attention_curriculum",
 }
 
 COLORS  = ["#2196F3", "#F44336", "#4CAF50", "#9C27B0", "#FF9800", "#00BCD4", "#E91E63", "#795548"]
@@ -67,17 +83,32 @@ MARKERS = ["o",       "s",       "^",       "D",       "v",       "P",       "X"
 # Loaders
 # ---------------------------------------------------------------------------
 
+def resolve_run_dir(path: Path) -> Path:
+    """Resolve versioned run layout (runs/NNN + latest symlink) or return path as-is."""
+    if (path / "predictions.csv").exists():
+        return path                              # old flat layout — backwards compatible
+    latest = path / "latest"
+    if latest.exists():
+        return latest.resolve()                  # follow symlink
+    runs = path / "runs"
+    if runs.is_dir():
+        versions = sorted(d for d in runs.iterdir() if d.is_dir() and d.name.isdigit())
+        if versions:
+            return versions[-1]                  # highest-numbered run
+    return path                                  # fallback — loaders will raise naturally
+
+
 def load_predictions(run_dir: Path) -> pd.DataFrame:
-    return pd.read_csv(run_dir / "predictions.csv")
+    return pd.read_csv(resolve_run_dir(run_dir) / "predictions.csv")
 
 
 def load_history(run_dir: Path) -> pd.DataFrame:
-    with open(run_dir / "history.json") as f:
+    with open(resolve_run_dir(run_dir) / "history.json") as f:
         return pd.DataFrame(json.load(f))
 
 
 def load_metrics(run_dir: Path) -> dict:
-    with open(run_dir / "metrics.json") as f:
+    with open(resolve_run_dir(run_dir) / "metrics.json") as f:
         return json.load(f)
 
 
@@ -87,6 +118,32 @@ def split_df(df: pd.DataFrame, split: str) -> pd.DataFrame:
 
 def extract_cohort(slide_id: str) -> str:
     return slide_id.split("_")[0]
+
+
+def parse_case_id(slide_id: str) -> str:
+    m = re.match(r"^(SR\d+)_40X_HE_T(\d+)_\d+$", slide_id)
+    return f"{m.group(1)}_T{m.group(2)}" if m else slide_id
+
+
+def aggregate_to_case_level(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """
+    Given slide-level predictions, return a dict of case-level DataFrames,
+    one per aggregation method: 'max', 'mean', 'noisy_or'.
+    Each output df has columns: case_id, label, prob.
+    """
+    df = df.copy()
+    df["case_id"] = df["slide_id"].apply(parse_case_id)
+
+    records: dict[str, list] = {"max": [], "mean": [], "noisy_or": []}
+    for case_id, group in df.groupby("case_id"):
+        label = int(group["label"].max())
+        probs = group["prob"]
+        records["max"].append({"case_id": case_id, "label": label, "prob": probs.max()})
+        records["mean"].append({"case_id": case_id, "label": label, "prob": probs.mean()})
+        records["noisy_or"].append({"case_id": case_id, "label": label,
+                                    "prob": 1.0 - (1.0 - probs).prod()})
+
+    return {agg: pd.DataFrame(rows) for agg, rows in records.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +416,106 @@ def plot_cohort_breakdown(
         ax.grid(True, alpha=0.3, axis="y")
 
     fig.tight_layout()
+    _save(fig, out)
+
+
+# ---------------------------------------------------------------------------
+# Case-level evaluation
+# ---------------------------------------------------------------------------
+
+def print_case_level_metrics(
+    run_preds: dict[str, pd.DataFrame],
+    split: str,
+) -> pd.DataFrame:
+    agg_methods = ["max", "mean", "noisy_or"]
+    rows = []
+    print(f"\n=== Case-level metrics ({split}, case aggregation) ===")
+    header = f"{'Model':<30} {'Aggregation':<12} {'N_cases':>8} {'N_pos':>6} {'AUROC':>7} {'AUPRC':>7}"
+    print(header)
+    print("-" * len(header))
+
+    for name, df in run_preds.items():
+        sub = split_df(df, split)
+        if sub.empty:
+            continue
+        case_dfs = aggregate_to_case_level(sub)
+        for agg in agg_methods:
+            cdf = case_dfs[agg]
+            if cdf["label"].nunique() < 2:
+                continue
+            auroc = roc_auc_score(cdf["label"], cdf["prob"])
+            auprc = average_precision_score(cdf["label"], cdf["prob"])
+            n_cases = len(cdf)
+            n_pos = int(cdf["label"].sum())
+            print(f"{name:<30} {agg:<12} {n_cases:>8} {n_pos:>6} {auroc:>7.3f} {auprc:>7.3f}")
+            rows.append({
+                "Model": name,
+                "Aggregation": agg,
+                "N_cases": n_cases,
+                "N_pos": n_pos,
+                "AUROC": round(auroc, 4),
+                "AUPRC": round(auprc, 4),
+            })
+
+    return pd.DataFrame(rows)
+
+
+def plot_case_level_roc_pr(
+    run_preds: dict[str, pd.DataFrame],
+    split: str,
+    out: Path,
+) -> None:
+    agg_methods = ["max", "mean", "noisy_or"]
+    linestyles = {"max": "-", "mean": "--", "noisy_or": ":"}
+
+    fig, (ax_roc, ax_pr) = plt.subplots(1, 2, figsize=(14, 5))
+
+    # prevalence for chance line (use first run as reference)
+    first_sub = None
+    for df in run_preds.values():
+        first_sub = split_df(df, split)
+        if not first_sub.empty:
+            break
+
+    for (name, df), color in zip(run_preds.items(), COLORS):
+        sub = split_df(df, split)
+        if sub.empty:
+            continue
+        case_dfs = aggregate_to_case_level(sub)
+        for agg in agg_methods:
+            cdf = case_dfs[agg]
+            if cdf["label"].nunique() < 2:
+                continue
+            y_true = cdf["label"].values
+            y_score = cdf["prob"].values
+            auroc = roc_auc_score(y_true, y_score)
+            auprc = average_precision_score(y_true, y_score)
+            ls = linestyles[agg]
+            RocCurveDisplay.from_predictions(
+                y_true, y_score,
+                name=f"{name} ({agg}, AUROC={auroc:.3f})",
+                ax=ax_roc, color=color, linestyle=ls,
+            )
+            PrecisionRecallDisplay.from_predictions(
+                y_true, y_score,
+                name=f"{name} ({agg}, AUPRC={auprc:.3f})",
+                ax=ax_pr, color=color, linestyle=ls,
+            )
+
+    ax_roc.plot([0, 1], [0, 1], "k--", lw=0.8, label="Chance")
+    ax_roc.set_title(f"Case-level ROC ({split})", fontsize=13)
+    ax_roc.legend(fontsize=7)
+
+    if first_sub is not None and not first_sub.empty:
+        case_ref = aggregate_to_case_level(first_sub)["max"]
+        prevalence = case_ref["label"].mean()
+        ax_pr.axhline(prevalence, color="k", linestyle="--", lw=0.8,
+                      label=f"Chance ({prevalence:.2f})")
+    ax_pr.set_title(f"Case-level PR ({split})", fontsize=13)
+    ax_pr.legend(fontsize=7)
+
+    fig.suptitle("Case-level Model Comparison (solid=max, dashed=mean, dotted=noisy_or)",
+                 fontsize=12, y=1.01)
     _save(fig, out)
 
 
@@ -684,7 +841,7 @@ def print_summary_table(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out", default="outputs/analysis")
+    parser.add_argument("--out", default="outputs/analysis/topk_sweep")
     parser.add_argument("--split", default="test", choices=["val", "test"])
     args = parser.parse_args()
 
@@ -702,7 +859,16 @@ def main():
             continue
         run_preds[name] = load_predictions(p)
         run_histories[name] = load_history(p)
-        print(f"  loaded {run_dir}")
+        resolved = resolve_run_dir(p)
+        runs_dir = p / "runs"
+        if runs_dir.is_dir():
+            n_versions = sum(1 for d in runs_dir.iterdir() if d.is_dir() and d.name.isdigit())
+            if n_versions > 1:
+                print(f"  loaded {run_dir}  [{resolved.name} of {n_versions} versions]")
+            else:
+                print(f"  loaded {run_dir}  [{resolved.name}]")
+        else:
+            print(f"  loaded {run_dir}")
 
     if not run_preds:
         print("No runs found. Exiting.")
@@ -718,6 +884,12 @@ def main():
     plot_confusion_matrices(run_preds, split, out / "confusion_matrices.png")
     plot_cohort_breakdown(run_preds, split, out / "cohort_breakdown.png")
     plot_threshold_sweep(run_preds, split, out / "threshold_sweep.png")
+
+    print("\nComputing case-level metrics...")
+    case_metrics = print_case_level_metrics(run_preds, split)
+    case_metrics.to_csv(out / "case_level_metrics.csv", index=False)
+    print(f"  saved {out / 'case_level_metrics.csv'}")
+    plot_case_level_roc_pr(run_preds, split, out / "case_level_roc_pr.png")
 
     print("\nExporting combined predictions...")
     export_combined_predictions(run_preds, out)

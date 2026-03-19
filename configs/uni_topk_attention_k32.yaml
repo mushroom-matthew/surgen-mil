@@ -5,26 +5,28 @@ data:
   val_frac: 0.15
 
 model:
-  name: attention_mil
+  name: topk_attention_mil
   input_dim: 1024
   attention_dim: 128
   hidden_dim: 256
   dropout: 0.1
+  k: 32
 
 optimizer:
   lr: 0.0001
   weight_decay: 0.0001
 
 loss:
-  name: focal
-  alpha: 0.5
-  gamma: 2.0
+  name: bce
+  weighted: true
 
 training:
   epochs: 30
   seed: 42
   early_stopping_patience: 10
   selection_metric: val_auprc
+  min_epochs: 10
+  ema_alpha: 0.7
 
 output:
-  dir: outputs/uni_attention_focal
+  dir: outputs/uni_topk_attention_k32

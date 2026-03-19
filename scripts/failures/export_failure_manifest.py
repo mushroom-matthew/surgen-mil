@@ -21,17 +21,34 @@ from pathlib import Path
 import pandas as pd
 
 RUNS = {
-    "mean_weighted":                "outputs/uni_mean",
-    "attention_weighted":           "outputs/uni_attention",
-    "gated_attention":              "outputs/uni_gated_attention",
-    "region_attention_8":           "outputs/uni_region_attention_8",
-    "region_attention_16":          "outputs/uni_region_attention_16",
-    "mean_var":                     "outputs/uni_mean_var",
-    "instance_mean":                "outputs/uni_instance_mean",
-    "attention_focal":              "outputs/uni_attention_focal",
-    "attention_normalized":         "outputs/uni_attention_bce_focal_normalized",
-    "attention_curriculum":         "outputs/uni_attention_bce_focal_curriculum",
+    "mean_pool":         "outputs/uni_mean",
+    "attention_mil":     "outputs/uni_attention",
+    "gated_attention":   "outputs/uni_gated_attention",
+    "topk_k4":           "outputs/uni_topk_attention_k4",
 }
+
+
+def _resolve_predictions(base_dir: Path) -> Path | None:
+    """Return path to predictions.csv, handling versioned and flat layouts."""
+    # flat layout
+    flat = base_dir / "predictions.csv"
+    if flat.exists():
+        return flat
+    # versioned: follow latest symlink
+    latest = base_dir / "latest"
+    if latest.exists():
+        p = latest.resolve() / "predictions.csv"
+        if p.exists():
+            return p
+    # versioned: highest-numbered run
+    runs = base_dir / "runs"
+    if runs.is_dir():
+        versions = sorted(d for d in runs.iterdir() if d.is_dir() and d.name.isdigit())
+        for d in reversed(versions):
+            p = d / "predictions.csv"
+            if p.exists():
+                return p
+    return None
 
 
 def extract_cohort(slide_id: str) -> str:
@@ -44,8 +61,8 @@ def extract_case_id(slide_id: str) -> int:
 
 
 def load_run(run_dir: Path, split: str) -> pd.DataFrame | None:
-    p = run_dir / "predictions.csv"
-    if not p.exists():
+    p = _resolve_predictions(run_dir)
+    if p is None:
         return None
     df = pd.read_csv(p)
     if split != "all":

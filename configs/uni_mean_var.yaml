@@ -19,9 +19,9 @@ optimizer:
   weight_decay: 0.0001
 
 training:
-  epochs: 15
+  epochs: 30
   seed: 42
-  early_stopping_patience: 3
+  early_stopping_patience: 10
   selection_metric: val_auprc
 
 output:

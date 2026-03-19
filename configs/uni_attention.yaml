@@ -20,10 +20,12 @@ loss:
   weighted: true
 
 training:
-  epochs: 15
+  epochs: 30
   seed: 42
-  early_stopping_patience: 3
+  early_stopping_patience: 10
   selection_metric: val_auprc
+  min_epochs: 10
+  ema_alpha: 0.7
 
 output:
   dir: outputs/uni_attention

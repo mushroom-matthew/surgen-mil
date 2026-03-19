@@ -7,6 +7,7 @@ from src.models.aggregators.lse_pool import LSEPoolMIL
 from src.models.aggregators.mean_pool import MeanPoolMIL
 from src.models.aggregators.mean_var_pool import MeanVarPoolMIL
 from src.models.aggregators.region_attention_mil import RegionAttentionMIL
+from src.models.aggregators.topk_attention_mil import TopKAttentionMIL
 
 
 def build_model(cfg):
@@ -59,6 +60,14 @@ def build_model(cfg):
             input_dim=cfg["model"]["input_dim"],
             hidden_dim=cfg["model"]["hidden_dim"],
             dropout=cfg["model"]["dropout"],
+        )
+    elif model_name == "topk_attention_mil":
+        return TopKAttentionMIL(
+            input_dim=cfg["model"]["input_dim"],
+            attention_dim=cfg["model"]["attention_dim"],
+            hidden_dim=cfg["model"]["hidden_dim"],
+            dropout=cfg["model"]["dropout"],
+            k=cfg["model"].get("k", 16),
         )
     else:
         raise ValueError(f"Unknown model: {model_name}")

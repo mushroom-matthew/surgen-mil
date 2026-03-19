@@ -19,9 +19,9 @@ loss:
   weighted: false
 
 training:
-  epochs: 15
+  epochs: 30
   seed: 42
-  early_stopping_patience: 3
+  early_stopping_patience: 10
   selection_metric: val_auprc
 
 output:
