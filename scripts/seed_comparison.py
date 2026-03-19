@@ -21,17 +21,23 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import average_precision_score, roc_auc_score
+from sklearn.metrics import (
+    PrecisionRecallDisplay,
+    RocCurveDisplay,
+    average_precision_score,
+    roc_auc_score,
+)
 
 # ---------------------------------------------------------------------------
 # Models to compare
 # ---------------------------------------------------------------------------
 
 ALL_MODELS = {
-    "uni_mean":              ("Mean Pool",       "outputs/uni_mean"),
-    "uni_attention":         ("Attention MIL",   "outputs/uni_attention"),
-    "uni_gated_attention":   ("Gated Attention", "outputs/uni_gated_attention"),
-    "uni_topk_attention_k4": ("Top-k (k=4)",     "outputs/uni_topk_attention_k4"),
+    "uni_mean":              ("Mean Pool",          "outputs/uni_mean"),
+    "uni_attention":         ("Attention MIL",      "outputs/uni_attention"),
+    "uni_gated_attention":   ("Gated Attention",    "outputs/uni_gated_attention"),
+    "uni_topk_attention_k4": ("Top-k (k=4)",        "outputs/uni_topk_attention_k4"),
+    "paper_reproduction":    ("Paper Reproduction", "outputs/paper_reproduction"),
 }
 
 # Default when --models is not specified
@@ -121,9 +127,11 @@ def load_run(run_dir: Path) -> dict | None:
     # Case-level metrics from predictions.csv (test split only)
     case: dict[str, dict] = {}
     test_preds: pd.DataFrame = pd.DataFrame()
+    val_preds: pd.DataFrame = pd.DataFrame()
     if preds_path.exists():
         preds = pd.read_csv(preds_path)
         test_preds = preds[preds["split"] == "test"].copy()
+        val_preds  = preds[preds["split"] == "val"].copy()
         if not test_preds.empty:
             case = case_level_metrics(test_preds)
 
@@ -136,6 +144,7 @@ def load_run(run_dir: Path) -> dict | None:
         "case": case,   # {agg: {auroc, auprc, n_cases, n_pos}}
         "history": load_history(run_dir),
         "test_preds": test_preds,
+        "val_preds":  val_preds,
     }
 
 
@@ -176,24 +185,27 @@ def plot_training_curves(model_runs: dict[str, list[dict]], out_path: Path) -> N
     if n_models == 0:
         return
 
-    fig, axes = plt.subplots(n_models, 2, figsize=(12, 4 * n_models), squeeze=False)
+    fig, axes = plt.subplots(n_models, 3, figsize=(17, 4 * n_models), squeeze=False)
 
     for row_idx, (model_name, runs) in enumerate(model_runs.items()):
         ax_auroc = axes[row_idx, 0]
-        ax_loss  = axes[row_idx, 1]
+        ax_auprc = axes[row_idx, 1]
+        ax_loss  = axes[row_idx, 2]
 
         for run_idx, run in enumerate(runs):
             hist = run.get("history")
             if not hist:
                 continue
-            epochs    = [h["epoch"] for h in hist]
-            val_auroc = [h.get("val_auroc") for h in hist]
+            epochs     = [h["epoch"] for h in hist]
+            val_auroc  = [h.get("val_auroc") for h in hist]
+            val_auprc  = [h.get("val_auprc") for h in hist]
             train_loss = [h.get("train_loss") for h in hist]
             label = f"seed {run['seed']} (run {run['run']})"
             color = PALETTE[run_idx % len(PALETTE)]
 
-            ax_auroc.plot(epochs, val_auroc,  color=color, label=label, linewidth=1.5)
-            ax_loss.plot( epochs, train_loss, color=color, label=label, linewidth=1.5)
+            ax_auroc.plot(epochs, val_auroc, color=color, label=label, linewidth=1.5, marker="o", markersize=3)
+            ax_auprc.plot(epochs, val_auprc, color=color, label=label, linewidth=1.5, marker="o", markersize=3)
+            ax_loss.plot( epochs, train_loss, color=color, label=label, linewidth=1.5, marker="o", markersize=3)
 
         ax_auroc.set_title(f"{model_name} — Val AUROC")
         ax_auroc.set_xlabel("Epoch")
@@ -201,6 +213,13 @@ def plot_training_curves(model_runs: dict[str, list[dict]], out_path: Path) -> N
         ax_auroc.set_ylim(0, 1)
         ax_auroc.legend(fontsize=8)
         ax_auroc.grid(True, alpha=0.3)
+
+        ax_auprc.set_title(f"{model_name} — Val AUPRC")
+        ax_auprc.set_xlabel("Epoch")
+        ax_auprc.set_ylabel("AUPRC")
+        ax_auprc.set_ylim(0, 1)
+        ax_auprc.legend(fontsize=8)
+        ax_auprc.grid(True, alpha=0.3)
 
         ax_loss.set_title(f"{model_name} — Train Loss")
         ax_loss.set_xlabel("Epoch")
@@ -307,6 +326,38 @@ def _classify_outcomes(df: pd.DataFrame, threshold: float = 0.5) -> pd.DataFrame
     return df
 
 
+def find_optimal_threshold_youden(df: pd.DataFrame, n: int = 500) -> float:
+    """Threshold that maximises Youden's J (sensitivity + specificity - 1) on df."""
+    y_true = df["label"].values
+    y_score = df["prob"].values
+    if len(np.unique(y_true)) < 2:
+        return 0.5
+    best_j, best_t = -1.0, 0.5
+    for t in np.linspace(0, 1, n):
+        y_pred = (y_score >= t).astype(int)
+        tp = ((y_pred == 1) & (y_true == 1)).sum()
+        tn = ((y_pred == 0) & (y_true == 0)).sum()
+        fp = ((y_pred == 1) & (y_true == 0)).sum()
+        fn = ((y_pred == 0) & (y_true == 1)).sum()
+        j = tp / max(tp + fn, 1) + tn / max(tn + fp, 1) - 1
+        if j > best_j:
+            best_j, best_t = j, t
+    return best_t
+
+
+def _average_preds(runs: list[dict], key: str) -> pd.DataFrame:
+    """Average predicted probabilities across runs; label taken from the first run."""
+    frames = [r[key] for r in runs if not r.get(key, pd.DataFrame()).empty]
+    if not frames:
+        return pd.DataFrame()
+    combined = pd.concat(frames)
+    return (
+        combined.groupby("slide_id", sort=False)
+        .agg(label=("label", "first"), prob=("prob", "mean"))
+        .reset_index()
+    )
+
+
 def _draw_cm(ax, df: pd.DataFrame, threshold: float, title: str) -> None:
     """Draw a single normalised confusion matrix onto ax."""
     df = _classify_outcomes(df, threshold)
@@ -329,60 +380,134 @@ def _draw_cm(ax, df: pd.DataFrame, threshold: float, title: str) -> None:
     ax.set_title(title, fontsize=8)
 
 
-def plot_confusion_matrices(
+def plot_roc_pr(
     model_runs: dict[str, list[dict]],
     out_path: Path,
-    threshold: float = 0.5,
-    case_agg: str = "max",
 ) -> None:
-    """Confusion matrices: 2 rows per model (slide / case), cols = runs."""
+    """ROC and PR curves, one curve per model (runs averaged)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    max_runs = max((len(runs) for runs in model_runs.values()), default=0)
-    n_models = len(model_runs)
-    if n_models == 0 or max_runs == 0:
-        return
+    fig, (ax_roc, ax_pr) = plt.subplots(1, 2, figsize=(12, 5))
 
-    n_rows = n_models * 2  # slide row + case row per model
-    fig, axes = plt.subplots(
-        n_rows, max_runs,
-        figsize=(3 * max_runs, 3.2 * n_rows),
-        squeeze=False,
-    )
+    for (model_name, runs), color in zip(model_runs.items(), PALETTE):
+        avg_test = _average_preds(runs, "test_preds")
+        if avg_test.empty or avg_test["label"].nunique() < 2:
+            continue
+        y_true  = avg_test["label"].values
+        y_score = avg_test["prob"].values
+        n_seeds = len(runs)
+        seed_note = f"n={n_seeds} avg" if n_seeds > 1 else f"seed {runs[0]['seed']}"
+        auroc = roc_auc_score(y_true, y_score)
+        auprc = average_precision_score(y_true, y_score)
+        label_roc = f"{model_name} ({seed_note})  AUROC={auroc:.3f}"
+        label_pr  = f"{model_name} ({seed_note})  AUPRC={auprc:.3f}"
+        RocCurveDisplay.from_predictions(y_true, y_score, name=label_roc, ax=ax_roc, color=color)
+        PrecisionRecallDisplay.from_predictions(y_true, y_score, name=label_pr, ax=ax_pr, color=color)
 
-    for model_idx, (model_name, runs) in enumerate(model_runs.items()):
-        slide_row = model_idx * 2
-        case_row  = model_idx * 2 + 1
+    ax_roc.plot([0, 1], [0, 1], "k--", lw=0.8, label="Chance")
+    ax_roc.set_title("ROC Curve (test)", fontsize=12)
+    ax_roc.legend(fontsize=8)
+    ax_roc.grid(True, alpha=0.3)
 
-        # Row labels on the leftmost column
-        axes[slide_row, 0].set_ylabel(f"{model_name}\nSlide", fontsize=9, labelpad=8)
-        axes[case_row,  0].set_ylabel(f"{model_name}\nCase ({case_agg})", fontsize=9, labelpad=8)
-
-        for col_idx in range(max_runs):
-            ax_slide = axes[slide_row, col_idx]
-            ax_case  = axes[case_row,  col_idx]
-
-            if col_idx >= len(runs):
-                ax_slide.axis("off")
-                ax_case.axis("off")
-                continue
-
-            run = runs[col_idx]
-            df = run.get("test_preds", pd.DataFrame())
-            seed_str = f"seed {run['seed']}" if run["seed"] is not None else f"run {run['run']}"
-
-            if df.empty:
-                ax_slide.axis("off")
-                ax_case.axis("off")
-                continue
-
-            _draw_cm(ax_slide, df, threshold, title=f"{seed_str} (τ={threshold})")
-            _draw_cm(ax_case, _to_case_df(df, case_agg), threshold, title=f"{seed_str} — {case_agg}")
+    # chance line: prevalence from the first non-empty model
+    for runs in model_runs.values():
+        avg = _average_preds(runs, "test_preds")
+        if not avg.empty:
+            prevalence = avg["label"].mean()
+            ax_pr.axhline(prevalence, color="k", linestyle="--", lw=0.8,
+                          label=f"Chance ({prevalence:.2f})")
+            break
+    ax_pr.set_title("Precision-Recall Curve (test)", fontsize=12)
+    ax_pr.legend(fontsize=8)
+    ax_pr.grid(True, alpha=0.3)
 
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved {out_path}")
+
+
+def plot_confusion_matrices(
+    model_runs: dict[str, list[dict]],
+    out_path: Path,
+    case_agg: str = "max",
+) -> None:
+    """Confusion matrices: cols = models (runs averaged), rows = slide / case.
+    Threshold is the optimal Youden's J from the averaged validation predictions."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    n_models = len(model_runs)
+    if n_models == 0:
+        return
+
+    fig, axes = plt.subplots(2, n_models, figsize=(3.5 * n_models, 7), squeeze=False)
+
+    for col, (model_name, runs) in enumerate(model_runs.items()):
+        avg_test = _average_preds(runs, "test_preds")
+        avg_val  = _average_preds(runs, "val_preds")
+
+        threshold = find_optimal_threshold_youden(avg_val) if not avg_val.empty else 0.5
+        n_seeds = len(runs)
+        seed_note = f"n={n_seeds} seeds avg" if n_seeds > 1 else f"seed {runs[0]['seed']}"
+
+        col_title = f"{model_name}\n({seed_note}, τ={threshold:.2f})"
+        if col == 0:
+            axes[0, col].set_ylabel("Slide", fontsize=9, labelpad=8)
+            axes[1, col].set_ylabel(f"Case ({case_agg})", fontsize=9, labelpad=8)
+
+        if avg_test.empty:
+            axes[0, col].axis("off")
+            axes[1, col].axis("off")
+            continue
+
+        _draw_cm(axes[0, col], avg_test, threshold, title=col_title)
+        _draw_cm(axes[1, col], _to_case_df(avg_test, case_agg), threshold, title="")
+
+    fig.suptitle("Confusion matrices — optimal val threshold (Youden's J)", fontsize=10, y=1.01)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved {out_path}")
+
+
+def plot_calibration(
+    model_runs: dict[str, list[dict]],
+    out_path: Path,
+    n_bins: int = 10,
+) -> None:
+    """Reliability diagram for averaged test predictions per model."""
+    from sklearn.calibration import calibration_curve
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    ax.plot([0, 1], [0, 1], "k--", lw=0.8, label="Perfect calibration")
+
+    for (model_name, runs), color in zip(model_runs.items(), PALETTE):
+        avg_test = _average_preds(runs, "test_preds")
+        if avg_test.empty or avg_test["label"].nunique() < 2:
+            continue
+        n_seeds = len(runs)
+        seed_note = f"n={n_seeds} avg" if n_seeds > 1 else f"seed {runs[0]['seed']}"
+        frac_pos, mean_pred = calibration_curve(
+            avg_test["label"], avg_test["prob"], n_bins=n_bins, strategy="uniform"
+        )
+        ax.plot(mean_pred, frac_pos, marker="o", color=color, linewidth=1.5, markersize=5,
+                label=f"{model_name} ({seed_note})")
+
+    ax.set_xlabel("Mean predicted probability")
+    ax.set_ylabel("Fraction of positives")
+    ax.set_title("Calibration (test)", fontsize=12)
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved {out_path}")
 
@@ -401,13 +526,13 @@ def _draw_dist(ax, df: pd.DataFrame, threshold: float, title: str) -> None:
         if len(vals) == 0:
             continue
         style = LABEL_STYLE[lbl]
-        ax.hist(vals, bins=bins, alpha=0.6,
+        ax.hist(vals, bins=bins, alpha=0.6, density=True,
                 label=f"{style['label']} (n={len(vals)})",
                 color=style["color"], edgecolor="white")
     ax.axvline(threshold, color="black", linestyle="--", linewidth=1, alpha=0.6)
     ax.set_xlim(0, 1)
     ax.set_xlabel("Predicted probability", fontsize=8)
-    ax.set_ylabel("Count", fontsize=8)
+    ax.set_ylabel("Density", fontsize=8)
     ax.set_title(title, fontsize=8)
     ax.legend(fontsize=7)
     ax.grid(True, axis="y", alpha=0.3)
@@ -416,56 +541,44 @@ def _draw_dist(ax, df: pd.DataFrame, threshold: float, title: str) -> None:
 def plot_error_distributions(
     model_runs: dict[str, list[dict]],
     out_path: Path,
-    threshold: float = 0.5,
     case_agg: str = "max",
 ) -> None:
-    """Score distributions: 2 rows per model (slide / case), cols = runs."""
+    """Score distributions: cols = models (runs averaged), rows = slide / case.
+    Threshold line is the optimal Youden's J from the averaged validation predictions."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    max_runs = max((len(runs) for runs in model_runs.values()), default=0)
     n_models = len(model_runs)
-    if n_models == 0 or max_runs == 0:
+    if n_models == 0:
         return
 
-    n_rows = n_models * 2
-    fig, axes = plt.subplots(
-        n_rows, max_runs,
-        figsize=(4.5 * max_runs, 3.5 * n_rows),
-        squeeze=False,
-    )
+    fig, axes = plt.subplots(2, n_models, figsize=(4.5 * n_models, 7), squeeze=False)
 
-    for model_idx, (model_name, runs) in enumerate(model_runs.items()):
-        slide_row = model_idx * 2
-        case_row  = model_idx * 2 + 1
+    for col, (model_name, runs) in enumerate(model_runs.items()):
+        avg_test = _average_preds(runs, "test_preds")
+        avg_val  = _average_preds(runs, "val_preds")
 
-        axes[slide_row, 0].set_ylabel(f"{model_name}\nSlide", fontsize=9, labelpad=8)
-        axes[case_row,  0].set_ylabel(f"{model_name}\nCase ({case_agg})", fontsize=9, labelpad=8)
+        threshold = find_optimal_threshold_youden(avg_val) if not avg_val.empty else 0.5
+        n_seeds = len(runs)
+        seed_note = f"n={n_seeds} seeds avg" if n_seeds > 1 else f"seed {runs[0]['seed']}"
 
-        for col_idx in range(max_runs):
-            ax_slide = axes[slide_row, col_idx]
-            ax_case  = axes[case_row,  col_idx]
+        col_title = f"{model_name}\n({seed_note}, τ={threshold:.2f})"
+        if col == 0:
+            axes[0, col].set_ylabel("Slide", fontsize=9, labelpad=8)
+            axes[1, col].set_ylabel(f"Case ({case_agg})", fontsize=9, labelpad=8)
 
-            if col_idx >= len(runs):
-                ax_slide.axis("off")
-                ax_case.axis("off")
-                continue
+        if avg_test.empty:
+            axes[0, col].axis("off")
+            axes[1, col].axis("off")
+            continue
 
-            run = runs[col_idx]
-            df = run.get("test_preds", pd.DataFrame())
-            seed_str = f"seed {run['seed']}" if run["seed"] is not None else f"run {run['run']}"
+        _draw_dist(axes[0, col], avg_test, threshold, title=col_title)
+        _draw_dist(axes[1, col], _to_case_df(avg_test, case_agg), threshold, title="")
 
-            if df.empty:
-                ax_slide.axis("off")
-                ax_case.axis("off")
-                continue
-
-            _draw_dist(ax_slide, df, threshold, title=f"{seed_str}")
-            _draw_dist(ax_case, _to_case_df(df, case_agg), threshold, title=f"{seed_str} — {case_agg}")
-
+    fig.suptitle("Score distributions — optimal val threshold (Youden's J)", fontsize=10, y=1.01)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved {out_path}")
 
@@ -625,9 +738,11 @@ def main():
 
         # Figures
         plot_training_curves(model_runs, out / "training_curves.png")
+        plot_roc_pr(model_runs, out / "roc_pr.png")
         plot_metric_summary(model_runs, out / "metric_summary.png", agg_method=args.case_agg)
-        plot_confusion_matrices(model_runs, out / "confusion_matrices.png", threshold=args.threshold, case_agg=args.case_agg)
-        plot_error_distributions(model_runs, out / "error_distributions.png", threshold=args.threshold, case_agg=args.case_agg)
+        plot_confusion_matrices(model_runs, out / "confusion_matrices.png", case_agg=args.case_agg)
+        plot_error_distributions(model_runs, out / "error_distributions.png", case_agg=args.case_agg)
+        plot_calibration(model_runs, out / "calibration.png")
 
         print(f"\nSaved to {out}/")
 
