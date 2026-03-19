@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import random
+import re
 from pathlib import Path
 
 import numpy as np
@@ -58,16 +59,17 @@ def build_loaders(cfg):
     provider = UniFeatureProvider(cfg["data"]["root"])
     all_indices = list(range(len(provider)))
 
+    split_seed = cfg["data"].get("split_seed", cfg["training"]["seed"])
     train_idx, val_idx, test_idx = case_grouped_stratified_split(
         provider,
         all_indices,
         train_frac=cfg["data"].get("train_frac", 0.7),
         val_frac=cfg["data"].get("val_frac", 0.15),
-        seed=cfg["training"]["seed"],
+        seed=split_seed,
     )
 
-    max_patches = cfg["data"]["max_patches"]
-    train_sampler = RandomPatchSampler(max_patches=max_patches)
+    max_patches = cfg["data"].get("max_patches")
+    train_sampler = FullBagSampler() if not max_patches else RandomPatchSampler(max_patches=max_patches)
     eval_sampler = FullBagSampler()
 
     train_ds = SurgenBagDataset(provider, indices=train_idx, sampler=train_sampler)
@@ -206,6 +208,81 @@ def find_temperature(model, loader, device) -> float:
     return float(result.x)
 
 
+_SLIDE_ID_RE = re.compile(r"^(SR\d+)_40X_HE_T(\d+)_\d+$")
+
+
+def compute_case_level_metrics(rows: list[dict]) -> dict:
+    """Aggregate slide-level predictions to case level and compute AUROC/AUPRC.
+
+    Aggregation strategies: max, mean, noisy_or (1 - prod(1 - p_i)).
+    """
+    from collections import defaultdict
+
+    case_probs: dict[tuple, list[float]] = defaultdict(list)
+    case_label: dict[tuple, int] = {}
+
+    for r in rows:
+        m = _SLIDE_ID_RE.match(r["slide_id"])
+        if not m:
+            continue
+        key = (m.group(1), int(m.group(2)))
+        case_probs[key].append(r["prob"])
+        case_label[key] = r["label"]
+
+    results = {}
+    for agg in ("max", "mean", "noisy_or"):
+        y_true, y_score = [], []
+        for key, probs in case_probs.items():
+            y_true.append(case_label[key])
+            if agg == "max":
+                y_score.append(max(probs))
+            elif agg == "mean":
+                y_score.append(sum(probs) / len(probs))
+            else:  # noisy_or
+                complement = 1.0
+                for p_i in probs:
+                    complement *= (1.0 - p_i)
+                y_score.append(1.0 - complement)
+
+        if len(set(y_true)) < 2:
+            results[agg] = {"auroc": None, "auprc": None}
+        else:
+            results[agg] = {
+                "auroc": float(roc_auc_score(y_true, y_score)),
+                "auprc": float(average_precision_score(y_true, y_score)),
+            }
+    return results
+
+
+def plot_training_curve(history: list[dict], out_path: Path) -> None:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    epochs = [r["epoch"] for r in history]
+    train_loss = [r["train_loss"] for r in history]
+    val_auroc = [r["val_auroc"] for r in history]
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+    axes[0].plot(epochs, train_loss, color="steelblue")
+    axes[0].set_xlabel("Epoch")
+    axes[0].set_ylabel("Train Loss")
+    axes[0].set_title("Training Loss")
+    axes[0].grid(True, alpha=0.3)
+
+    axes[1].plot(epochs, val_auroc, color="darkorange")
+    axes[1].set_xlabel("Epoch")
+    axes[1].set_ylabel("AUROC")
+    axes[1].set_title("Validation AUROC")
+    axes[1].set_ylim(0, 1)
+    axes[1].grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
@@ -224,7 +301,8 @@ def main():
     base_dir = Path(cfg["output"]["dir"])
     run_num, out_dir = next_run_dir(base_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy(args.config, out_dir / "config.yaml")
+    with open(out_dir / "config.yaml", "w") as f:
+        yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
     print(f"Run {run_num:03d} → {out_dir}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -247,11 +325,21 @@ def main():
         print(f"Train positives: {n_pos}, negatives: {n_neg}")
     criterion = build_loss(loss_cfg, device, pos_weight=pos_weight)
     print(f"Loss: {loss_cfg['name']}")
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=cfg["optimizer"]["lr"],
-        weight_decay=cfg["optimizer"]["weight_decay"],
-    )
+    opt_type = cfg["optimizer"].get("type", "adamw").lower()
+    if opt_type == "adam":
+        optimizer = torch.optim.Adam(
+            model.parameters(),
+            lr=cfg["optimizer"]["lr"],
+        )
+    else:
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=cfg["optimizer"]["lr"],
+            weight_decay=cfg["optimizer"].get("weight_decay", 1e-4),
+        )
+
+    use_amp = cfg["training"].get("use_amp", False) and device.type == "cuda"
+    scaler = torch.cuda.amp.GradScaler() if use_amp else None
 
     scheduler_name = cfg["optimizer"].get("scheduler", "none")
     if scheduler_name == "cosine":
@@ -273,8 +361,9 @@ def main():
     patience = cfg["training"].get("early_stopping_patience", None)
     selection_metric = cfg["training"].get("selection_metric", "val_auprc")
     min_epochs = cfg["training"].get("min_epochs", 10)
-    ema_alpha = cfg["training"].get("ema_alpha", 0.7)
+    ema_alpha = cfg["training"].get("ema_alpha", 0.7)  # None disables EMA
     ema_val_metric = None
+    use_best_checkpoint = cfg["training"].get("use_best_checkpoint", True)
 
     best_val_metric = -1.0
     best_state = None
@@ -294,11 +383,20 @@ def main():
             coords = batch["coords"].to(device)
 
             optimizer.zero_grad()
-            out = model(x, coords=coords)
-            logit = out["logit"].view(())
-            loss = criterion(logit.unsqueeze(0), y.unsqueeze(0))
-            loss.backward()
-            optimizer.step()
+            if use_amp:
+                with torch.autocast(device_type="cuda"):
+                    out = model(x, coords=coords)
+                    logit = out["logit"].view(())
+                    loss = criterion(logit.unsqueeze(0), y.unsqueeze(0))
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                out = model(x, coords=coords)
+                logit = out["logit"].view(())
+                loss = criterion(logit.unsqueeze(0), y.unsqueeze(0))
+                loss.backward()
+                optimizer.step()
 
             epoch_loss += loss.item()
             pbar.set_postfix(loss=f"{loss.item():.4f}")
@@ -308,7 +406,9 @@ def main():
 
         raw_metric = val_metrics.get(selection_metric.replace("val_", ""))
         if raw_metric is not None:
-            if ema_val_metric is None:
+            if ema_alpha is None:
+                ema_val_metric = raw_metric  # no smoothing
+            elif ema_val_metric is None:
                 ema_val_metric = raw_metric
             else:
                 ema_val_metric = ema_alpha * ema_val_metric + (1 - ema_alpha) * raw_metric
@@ -342,9 +442,11 @@ def main():
         if scheduler is not None:
             scheduler.step()
 
-    print(f"Best {selection_metric}: {best_val_metric:.4f} — loading best checkpoint")
-    if best_state is not None:
+    if use_best_checkpoint and best_state is not None:
+        print(f"Best {selection_metric}: {best_val_metric:.4f} — loading best checkpoint")
         model.load_state_dict(best_state)
+    else:
+        print(f"Best {selection_metric}: {best_val_metric:.4f} — using final epoch weights")
 
     temperature = find_temperature(model, val_loader, device)
     print(f"Temperature (val): {temperature:.4f}")
@@ -356,13 +458,24 @@ def main():
 
     print("Test metrics (temperature-scaled):", test_metrics)
 
+    case_metrics = compute_case_level_metrics(test_rows)
+    print("Case-level metrics (test):", case_metrics)
+
     torch.save(model.state_dict(), out_dir / "model.pt")
     with open(out_dir / "history.json", "w") as f:
         json.dump(history, f, indent=2)
     with open(out_dir / "metrics.json", "w") as f:
-        json.dump({"test": test_metrics, "temperature": temperature}, f, indent=2)
+        json.dump({
+            "test": test_metrics,
+            "test_case_level": case_metrics,
+            "temperature": temperature,
+        }, f, indent=2)
     pd.DataFrame(all_preds).to_csv(out_dir / "predictions.csv", index=False)
     print(f"Predictions saved to {out_dir / 'predictions.csv'}")
+
+    plot_training_curve(history, out_dir / "training_curve.png")
+    print(f"Training curve saved to {out_dir / 'training_curve.png'}")
+
     update_latest_symlink(base_dir, out_dir)
 
 

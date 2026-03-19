@@ -1,0 +1,34 @@
+data:
+  root: /mnt/data-surgen
+  max_patches: null  # full bags — no patch sampling
+  train_frac: 0.7
+  val_frac: 0.15
+
+model:
+  name: transformer_mil
+  input_dim: 1024
+  proj_dim: 512
+  n_layers: 2
+  n_heads: 2
+  ffn_dim: 2048
+  dropout: 0.15
+  ln_eps: 1.0e-5
+
+optimizer:
+  type: adam        # paper uses Adam, not AdamW
+  lr: 1.0e-4
+
+loss:
+  name: bce
+  weighted: false   # no class weighting
+
+training:
+  epochs: 200
+  seed: 42
+  use_amp: true
+  ema_alpha: null           # EMA disabled
+  early_stopping_patience: null  # no early stopping
+  use_best_checkpoint: false     # use final epoch weights
+
+output:
+  dir: outputs/paper_reproduction

@@ -46,6 +46,15 @@ def case_grouped_stratified_split(provider, indices, train_frac=0.7, val_frac=0.
     rng.shuffle(val_idx)
     rng.shuffle(test_idx)
 
-    print(f"  Case split — pos cases: {len(pos_keys)}, neg cases: {len(neg_keys)}")
-    print(f"  Slides    — train: {len(train_idx)}, val: {len(val_idx)}, test: {len(test_idx)}")
+    print(f"  Cases total — pos: {len(pos_keys)}, neg: {len(neg_keys)}")
+    print(
+        "  Cases split — "
+        f"train: {len(pos_tr)} pos / {len(neg_tr)} neg, "
+        f"val: {len(pos_val)} pos / {len(neg_val)} neg, "
+        f"test: {len(pos_te)} pos / {len(neg_te)} neg"
+    )
+    print(
+        "  Slides split — "
+        f"train: {len(train_idx)}, val: {len(val_idx)}, test: {len(test_idx)}"
+    )
     return train_idx, val_idx, test_idx

@@ -1,5 +1,6 @@
 data:
   root: /mnt/data-surgen
+  split_seed: 0
   max_patches: 512
   train_frac: 0.7
   val_frac: 0.15

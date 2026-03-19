@@ -8,6 +8,7 @@ from src.models.aggregators.mean_pool import MeanPoolMIL
 from src.models.aggregators.mean_var_pool import MeanVarPoolMIL
 from src.models.aggregators.region_attention_mil import RegionAttentionMIL
 from src.models.aggregators.topk_attention_mil import TopKAttentionMIL
+from src.models.aggregators.transformer_mil import TransformerMIL
 
 
 def build_model(cfg):
@@ -68,6 +69,16 @@ def build_model(cfg):
             hidden_dim=cfg["model"]["hidden_dim"],
             dropout=cfg["model"]["dropout"],
             k=cfg["model"].get("k", 16),
+        )
+    elif model_name == "transformer_mil":
+        return TransformerMIL(
+            input_dim=cfg["model"]["input_dim"],
+            proj_dim=cfg["model"].get("proj_dim", 512),
+            n_layers=cfg["model"].get("n_layers", 2),
+            n_heads=cfg["model"].get("n_heads", 2),
+            ffn_dim=cfg["model"].get("ffn_dim", 2048),
+            dropout=cfg["model"].get("dropout", 0.15),
+            ln_eps=cfg["model"].get("ln_eps", 1e-5),
         )
     else:
         raise ValueError(f"Unknown model: {model_name}")
