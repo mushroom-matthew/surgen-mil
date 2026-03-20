@@ -33,15 +33,20 @@ from sklearn.metrics import (
 # ---------------------------------------------------------------------------
 
 ALL_MODELS = {
+    # Original runs (mixed split seeds — for reference only, not cross-model comparable)
     "uni_mean":              ("Mean Pool",          "outputs/uni_mean"),
     "uni_attention":         ("Attention MIL",      "outputs/uni_attention"),
     "uni_gated_attention":   ("Gated Attention",    "outputs/uni_gated_attention"),
     "uni_topk_attention_k4": ("Top-k (k=4)",        "outputs/uni_topk_attention_k4"),
     "paper_reproduction":    ("Paper Reproduction", "outputs/paper_reproduction"),
+    # Fair comparison (split_seed=0, seeds 42/123/456 — apples-to-apples)
+    "uni_mean_fair":              ("Mean Pool (fair)",         "outputs/uni_mean_fair"),
+    "uni_attention_fair":         ("Attention MIL (fair)",     "outputs/uni_attention_fair"),
+    "paper_reproduction_fair":    ("Paper Repro (fair)",       "outputs/paper_reproduction_fair"),
 }
 
-# Default when --models is not specified
-_DEFAULT_MODELS = list(ALL_MODELS.keys())
+# Default when --models is not specified — fair runs only
+_DEFAULT_MODELS = ["uni_mean_fair", "uni_attention_fair", "paper_reproduction_fair"]
 
 AGG_METHODS = ["max", "mean", "noisy_or"]
 
@@ -345,17 +350,41 @@ def find_optimal_threshold_youden(df: pd.DataFrame, n: int = 500) -> float:
     return best_t
 
 
-def _average_preds(runs: list[dict], key: str) -> pd.DataFrame:
-    """Average predicted probabilities across runs; label taken from the first run."""
+def _splits_consistent(runs: list[dict], key: str) -> bool:
+    """Return True if all runs share exactly the same set of slide_ids for this split."""
+    slide_sets = [
+        frozenset(r[key]["slide_id"]) for r in runs
+        if not r.get(key, pd.DataFrame()).empty
+    ]
+    return len(slide_sets) > 0 and len(set(slide_sets)) == 1
+
+
+def _average_preds(runs: list[dict], key: str) -> tuple[pd.DataFrame, str]:
+    """Average predicted probabilities across runs if splits are consistent.
+
+    Returns (df, note) where note describes what was done.
+    Falls back to the single best run (by slide_auroc) if splits differ.
+    """
     frames = [r[key] for r in runs if not r.get(key, pd.DataFrame()).empty]
     if not frames:
-        return pd.DataFrame()
-    combined = pd.concat(frames)
-    return (
-        combined.groupby("slide_id", sort=False)
-        .agg(label=("label", "first"), prob=("prob", "mean"))
-        .reset_index()
-    )
+        return pd.DataFrame(), ""
+
+    if _splits_consistent(runs, key):
+        combined = pd.concat(frames)
+        df = (
+            combined.groupby("slide_id", sort=False)
+            .agg(label=("label", "first"), prob=("prob", "mean"))
+            .reset_index()
+        )
+        n = len([r for r in runs if not r.get(key, pd.DataFrame()).empty])
+        return df, f"n={n} avg"
+    else:
+        # Inconsistent splits — pick the single best run by slide AUROC
+        best = max(
+            (r for r in runs if not r.get(key, pd.DataFrame()).empty),
+            key=lambda r: r.get("slide_auroc") or 0.0,
+        )
+        return best[key].copy(), f"seed {best['seed']} (best, splits differ)"
 
 
 def _draw_cm(ax, df: pd.DataFrame, threshold: float, title: str) -> None:
@@ -392,13 +421,11 @@ def plot_roc_pr(
     fig, (ax_roc, ax_pr) = plt.subplots(1, 2, figsize=(12, 5))
 
     for (model_name, runs), color in zip(model_runs.items(), PALETTE):
-        avg_test = _average_preds(runs, "test_preds")
+        avg_test, seed_note = _average_preds(runs, "test_preds")
         if avg_test.empty or avg_test["label"].nunique() < 2:
             continue
         y_true  = avg_test["label"].values
         y_score = avg_test["prob"].values
-        n_seeds = len(runs)
-        seed_note = f"n={n_seeds} avg" if n_seeds > 1 else f"seed {runs[0]['seed']}"
         auroc = roc_auc_score(y_true, y_score)
         auprc = average_precision_score(y_true, y_score)
         label_roc = f"{model_name} ({seed_note})  AUROC={auroc:.3f}"
@@ -413,7 +440,7 @@ def plot_roc_pr(
 
     # chance line: prevalence from the first non-empty model
     for runs in model_runs.values():
-        avg = _average_preds(runs, "test_preds")
+        avg, _ = _average_preds(runs, "test_preds")
         if not avg.empty:
             prevalence = avg["label"].mean()
             ax_pr.axhline(prevalence, color="k", linestyle="--", lw=0.8,
@@ -447,14 +474,12 @@ def plot_confusion_matrices(
     fig, axes = plt.subplots(2, n_models, figsize=(3.5 * n_models, 7), squeeze=False)
 
     for col, (model_name, runs) in enumerate(model_runs.items()):
-        avg_test = _average_preds(runs, "test_preds")
-        avg_val  = _average_preds(runs, "val_preds")
+        avg_test, test_note = _average_preds(runs, "test_preds")
+        avg_val,  _         = _average_preds(runs, "val_preds")
 
         threshold = find_optimal_threshold_youden(avg_val) if not avg_val.empty else 0.5
-        n_seeds = len(runs)
-        seed_note = f"n={n_seeds} seeds avg" if n_seeds > 1 else f"seed {runs[0]['seed']}"
 
-        col_title = f"{model_name}\n({seed_note}, τ={threshold:.2f})"
+        col_title = f"{model_name}\n({test_note}, τ={threshold:.2f})"
         if col == 0:
             axes[0, col].set_ylabel("Slide", fontsize=9, labelpad=8)
             axes[1, col].set_ylabel(f"Case ({case_agg})", fontsize=9, labelpad=8)
@@ -489,11 +514,9 @@ def plot_calibration(
     ax.plot([0, 1], [0, 1], "k--", lw=0.8, label="Perfect calibration")
 
     for (model_name, runs), color in zip(model_runs.items(), PALETTE):
-        avg_test = _average_preds(runs, "test_preds")
+        avg_test, seed_note = _average_preds(runs, "test_preds")
         if avg_test.empty or avg_test["label"].nunique() < 2:
             continue
-        n_seeds = len(runs)
-        seed_note = f"n={n_seeds} avg" if n_seeds > 1 else f"seed {runs[0]['seed']}"
         frac_pos, mean_pred = calibration_curve(
             avg_test["label"], avg_test["prob"], n_bins=n_bins, strategy="uniform"
         )
@@ -556,14 +579,12 @@ def plot_error_distributions(
     fig, axes = plt.subplots(2, n_models, figsize=(4.5 * n_models, 7), squeeze=False)
 
     for col, (model_name, runs) in enumerate(model_runs.items()):
-        avg_test = _average_preds(runs, "test_preds")
-        avg_val  = _average_preds(runs, "val_preds")
+        avg_test, test_note = _average_preds(runs, "test_preds")
+        avg_val,  _         = _average_preds(runs, "val_preds")
 
         threshold = find_optimal_threshold_youden(avg_val) if not avg_val.empty else 0.5
-        n_seeds = len(runs)
-        seed_note = f"n={n_seeds} seeds avg" if n_seeds > 1 else f"seed {runs[0]['seed']}"
 
-        col_title = f"{model_name}\n({seed_note}, τ={threshold:.2f})"
+        col_title = f"{model_name}\n({test_note}, τ={threshold:.2f})"
         if col == 0:
             axes[0, col].set_ylabel("Slide", fontsize=9, labelpad=8)
             axes[1, col].set_ylabel(f"Case ({case_agg})", fontsize=9, labelpad=8)

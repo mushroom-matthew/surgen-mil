@@ -41,9 +41,12 @@ from src.data.feature_provider import UniFeatureProvider
 # ---------------------------------------------------------------------------
 
 MODELS: dict[str, str] = {
-    "Attention MIL":   "outputs/uni_attention",
-    "Gated Attention": "outputs/uni_gated_attention",
-    "Top-k (k=4)":     "outputs/uni_topk_attention_k4",
+    "Attention MIL":        "outputs/uni_attention",
+    "Gated Attention":      "outputs/uni_gated_attention",
+    "Top-k (k=4)":          "outputs/uni_topk_attention_k4",
+    # Fair comparison runs
+    "Attn MIL (fair)":      "outputs/uni_attention_fair",
+    "Paper Repro (fair)":   "outputs/paper_reproduction_fair",
 }
 
 
@@ -109,30 +112,66 @@ def _load_model(cfg_path: Path, ckpt_path: Path, device: torch.device):
     return model.to(device).eval()
 
 
-@torch.no_grad()
+def _integrated_gradients(
+    model,
+    features: np.ndarray,
+    coords: np.ndarray,
+    device: torch.device,
+    n_steps: int = 50,
+) -> tuple[float, np.ndarray]:
+    """Integrated Gradients: attributions = (x - baseline) * avg_grad along path.
+    Baseline is the zero embedding. Per-patch importance is the L2 norm of the
+    attribution vector, which is more spatially smooth than vanilla gradients."""
+    model.eval()
+    x        = torch.tensor(features, dtype=torch.float32, device=device)
+    c        = torch.tensor(coords,   dtype=torch.float32, device=device)
+    baseline = torch.zeros_like(x)
+
+    integrated_grads = torch.zeros_like(x)
+    for k in range(1, n_steps + 1):
+        x_step = (baseline + (k / n_steps) * (x - baseline)).detach().requires_grad_(True)
+        out    = model(x_step, coords=c)
+        out["logit"].view(()).backward()
+        integrated_grads += x_step.grad
+
+    integrated_grads /= n_steps
+    attributions = (x - baseline) * integrated_grads   # [N, D]
+    saliency = attributions.norm(dim=-1).detach().cpu().numpy()  # [N]
+
+    with torch.no_grad():
+        prob = torch.sigmoid(model(x, coords=c)["logit"].view(())).item()
+    return prob, saliency
+
+
 def extract_scores(
     model,
     features: np.ndarray,
     coords: np.ndarray,
     device: torch.device,
-) -> tuple[float, np.ndarray | None, np.ndarray | None]:
-    x = torch.tensor(features, dtype=torch.float32).to(device)
-    c = torch.tensor(coords,   dtype=torch.float32).to(device)
-    out = model(x, coords=c)
-    prob = torch.sigmoid(out["logit"].view(())).item()
+) -> tuple[float, np.ndarray | None, np.ndarray | None, str]:
+    """Returns (prob, scores, coords, score_type) where score_type is one of
+    'attention', 'instance', 'region', 'grad-saliency', or 'none'."""
+    with torch.no_grad():
+        x = torch.tensor(features, dtype=torch.float32).to(device)
+        c = torch.tensor(coords,   dtype=torch.float32).to(device)
+        out = model(x, coords=c)
+        prob = torch.sigmoid(out["logit"].view(())).item()
 
-    if "attention_weights" in out:
-        return prob, out["attention_weights"].cpu().numpy(), coords
-    if "instance_scores" in out:
-        return prob, out["instance_scores"].cpu().numpy(), coords
-    if "region_attention_weights" in out:
-        region_ids     = model._bin_coords(c).cpu().numpy()
-        region_weights = out["region_attention_weights"].cpu().numpy()
-        unique_ids     = np.unique(region_ids)
-        id_to_w        = {rid: region_weights[i] for i, rid in enumerate(unique_ids)}
-        patch_scores   = np.array([id_to_w[rid] for rid in region_ids])
-        return prob, patch_scores, coords
-    return prob, None, None
+        if "attention_weights" in out:
+            return prob, out["attention_weights"].cpu().numpy(), coords, "attention"
+        if "instance_scores" in out:
+            return prob, out["instance_scores"].cpu().numpy(), coords, "instance"
+        if "region_attention_weights" in out:
+            region_ids     = model._bin_coords(c).cpu().numpy()
+            region_weights = out["region_attention_weights"].cpu().numpy()
+            unique_ids     = np.unique(region_ids)
+            id_to_w        = {rid: region_weights[i] for i, rid in enumerate(unique_ids)}
+            patch_scores   = np.array([id_to_w[rid] for rid in region_ids])
+            return prob, patch_scores, coords, "region"
+
+    # Fallback: integrated gradients (requires grad, so outside no_grad block)
+    prob, saliency = _integrated_gradients(model, features, coords, device)
+    return prob, saliency, coords, "integ-grad"
 
 
 def normalise(scores: np.ndarray) -> np.ndarray:
@@ -140,6 +179,15 @@ def normalise(scores: np.ndarray) -> np.ndarray:
     if hi - lo < 1e-12:
         return np.zeros_like(scores)
     return (scores - lo) / (hi - lo)
+
+
+def log_normalise(scores: np.ndarray, eps: float = 1e-2) -> np.ndarray:
+    """Linear-normalise to [0,1], then log-stretch and re-normalise.
+    Expands the low-score range so dim patches get more colour contrast;
+    compresses the bright tail so inter-model intensity is more comparable."""
+    lin = normalise(scores)
+    stretched = np.log(lin + eps)
+    return normalise(stretched)
 
 
 # ---------------------------------------------------------------------------
@@ -214,21 +262,34 @@ def select_slides(
 # Plotting helpers
 # ---------------------------------------------------------------------------
 
-def _scatter_panel(ax, coords, scores_norm, topk_idx, title, prob):
+OUTCOME_COLORS = {"TP": "#2e7d32", "TN": "#1565c0", "FP": "#e65100", "FN": "#6a1b9a"}
+
+
+def _outcome_label(prob: float, true_label: int, threshold: float) -> str:
+    pred = int(prob >= threshold)
+    if   true_label == 1 and pred == 1: return "TP"
+    elif true_label == 0 and pred == 1: return "FP"
+    elif true_label == 1 and pred == 0: return "FN"
+    else:                               return "TN"
+
+
+def _scatter_panel(ax, coords, scores_norm, topk_idx, title, prob, outcome: str):
     sc = ax.scatter(
         coords[:, 0], coords[:, 1],
         c=scores_norm, cmap="hot", s=14, alpha=0.85,
         vmin=0, vmax=1,
     )
-    ax.scatter(
-        coords[topk_idx, 0], coords[topk_idx, 1],
-        s=55, facecolors="none", edgecolors="cyan", linewidths=1.1,
-    )
-    plt.colorbar(sc, ax=ax, label="Norm. score", fraction=0.03)
+    plt.colorbar(sc, ax=ax, label="Log-norm. score", fraction=0.03)
+    outcome_color = OUTCOME_COLORS.get(outcome, "black")
     ax.set_title(f"{title}\nprob={prob:.3f}", fontsize=8)
     ax.set_xlabel("x"); ax.set_ylabel("y")
     ax.invert_yaxis()
     ax.set_aspect("equal")
+    # Outcome badge in top-right corner
+    ax.text(0.98, 0.98, outcome, transform=ax.transAxes,
+            fontsize=11, fontweight="bold", color="white",
+            ha="right", va="top",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor=outcome_color, alpha=0.85))
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +306,7 @@ def make_comparison_figure(
     topk: int,
     data_root: str,
     out: Path,
+    threshold: float = 0.5,
 ) -> None:
     scored = [(n, p, sc, ec) for n, p, sc, ec in results if sc is not None]
     czi_result = _load_czi_thumbnail(slide_id, data_root)
@@ -261,7 +323,8 @@ def make_comparison_figure(
     label_str  = "MSI" if label == 1 else "MSS"
     cat_labels = {"tp": "True Positive", "fp": "False Positive", "fn": "False Negative"}
     fig.suptitle(
-        f"{slide_id}  |  True: {label_str}  |  {cat_labels.get(category, category)}",
+        f"{slide_id}  |  True: {label_str}  |  {cat_labels.get(category, category)}  "
+        f"|  threshold={threshold:.2f}",
         fontsize=11, y=1.01,
     )
 
@@ -281,9 +344,10 @@ def make_comparison_figure(
         ax.set_xlabel("x"); ax.set_ylabel("y")
 
     for name, prob, scores, eff_coords in scored:
-        scores_norm = normalise(scores)
+        scores_norm = log_normalise(scores)
         topk_idx    = np.argsort(scores_norm)[-topk:]
-        _scatter_panel(axes[ax_idx], eff_coords, scores_norm, topk_idx, name, prob)
+        outcome     = _outcome_label(prob, label, threshold)
+        _scatter_panel(axes[ax_idx], eff_coords, scores_norm, topk_idx, name, prob, outcome)
         ax_idx += 1
 
     fig.tight_layout()
@@ -309,6 +373,7 @@ def make_seed_grid_figure(
     topk: int,
     data_root: str,
     out: Path,
+    threshold: float = 0.5,
 ) -> None:
     model_names = [n for n in MODELS if n in grid_data and grid_data[n]]
     if not model_names:
@@ -361,23 +426,24 @@ def make_seed_grid_figure(
                 continue
 
             prob, scores, eff_coords = cell
-            scores_norm = normalise(scores)
-            topk_idx    = np.argsort(scores_norm)[-min(topk, len(scores)):]
+            scores_norm = log_normalise(scores)
+            outcome     = _outcome_label(prob, label, threshold)
 
             sc = ax.scatter(
                 eff_coords[:, 0], eff_coords[:, 1],
                 c=scores_norm, cmap="hot", s=12, alpha=0.85, vmin=0, vmax=1,
             )
-            ax.scatter(
-                eff_coords[topk_idx, 0], eff_coords[topk_idx, 1],
-                s=50, facecolors="none", edgecolors="cyan", linewidths=1.0,
-            )
-            plt.colorbar(sc, ax=ax, fraction=0.03, label="Norm.")
+            plt.colorbar(sc, ax=ax, fraction=0.03, label="Log-norm.")
             title = f"{model_name}\nseed {seed_label}  prob={prob:.3f}"
             ax.set_title(title, fontsize=8)
             ax.set_xlabel("x"); ax.set_ylabel("y")
             ax.invert_yaxis()
             ax.set_aspect("equal")
+            outcome_color = OUTCOME_COLORS.get(outcome, "black")
+            ax.text(0.98, 0.98, outcome, transform=ax.transAxes,
+                    fontsize=10, fontweight="bold", color="white",
+                    ha="right", va="top",
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor=outcome_color, alpha=0.85))
 
     fig.tight_layout()
     out.mkdir(parents=True, exist_ok=True)
@@ -399,6 +465,7 @@ def run_slide_default(
     topk: int,
     data_root: str,
     out: Path,
+    threshold: float = 0.5,
 ) -> None:
     rec_idx = next(
         (i for i, r in enumerate(provider.records) if r.slide_id == slide_id), None
@@ -425,14 +492,16 @@ def run_slide_default(
             print(f"  SKIP {name}: no config for run {run_label}")
             continue
         model = _load_model(cfg_path, ckpt_path, device)
-        prob, scores, eff_coords = extract_scores(model, features, coords, device)
-        tag = "scores OK" if scores is not None else "no patch scores"
-        print(f"    {name:25s}  run={run_label}  prob={prob:.4f}  {tag}")
-        results.append((name, prob, scores, eff_coords))
+        prob, scores, eff_coords, score_type = extract_scores(model, features, coords, device)
+        tag = score_type if scores is not None else "no patch scores"
+        print(f"    {name:25s}  run={run_label}  prob={prob:.4f}  [{tag}]")
+        display_name = f"{name}\n[{tag}]"
+        results.append((display_name, prob, scores, eff_coords))
 
     make_comparison_figure(
         slide_id, label, category, features, coords, results,
         topk=min(topk, len(features)), data_root=data_root, out=out,
+        threshold=threshold,
     )
 
 
@@ -444,6 +513,7 @@ def run_slide_seed_grid(
     topk: int,
     data_root: str,
     out: Path,
+    threshold: float = 0.5,
 ) -> None:
     rec_idx = next(
         (i for i, r in enumerate(provider.records) if r.slide_id == slide_id), None
@@ -470,14 +540,15 @@ def run_slide_seed_grid(
                 print(f"    SKIP {name} run={run_label}: no config")
                 continue
             model = _load_model(cfg_path, ckpt_path, device)
-            prob, scores, eff_coords = extract_scores(model, features, coords, device)
-            tag = "OK" if scores is not None else "no scores"
-            print(f"    {name:25s}  run={run_label}  prob={prob:.4f}  {tag}")
+            prob, scores, eff_coords, score_type = extract_scores(model, features, coords, device)
+            tag = score_type if scores is not None else "no scores"
+            print(f"    {name:25s}  run={run_label}  prob={prob:.4f}  [{tag}]")
             grid_data[name][run_label] = (prob, scores, eff_coords)
 
     make_seed_grid_figure(
         slide_id, label, category, features, coords, grid_data,
         topk=min(topk, len(features)), data_root=data_root, out=out,
+        threshold=threshold,
     )
 
 
@@ -523,7 +594,8 @@ def main():
     run_fn = run_slide_seed_grid if args.seed_grid else run_slide_default
 
     if args.slide_id:
-        run_fn(args.slide_id, "single", provider, device, args.topk, data_root, out)
+        run_fn(args.slide_id, "single", provider, device, args.topk, data_root, out,
+               threshold=args.threshold)
     else:
         categories = select_slides(args.threshold, args.n_examples, args.split)
         for category, slide_ids in categories.items():
@@ -531,7 +603,8 @@ def main():
                 print(f"  No slides for category: {category}")
                 continue
             for slide_id in slide_ids:
-                run_fn(slide_id, category, provider, device, args.topk, data_root, out)
+                run_fn(slide_id, category, provider, device, args.topk, data_root, out,
+                       threshold=args.threshold)
 
 
 if __name__ == "__main__":
