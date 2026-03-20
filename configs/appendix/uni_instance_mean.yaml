@@ -28,4 +28,4 @@ training:
   ema_alpha: 0.7
 
 output:
-  dir: outputs/appendix_instance_mean
+  dir: outputs/appendix/uni_instance_mean

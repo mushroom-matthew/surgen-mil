@@ -221,48 +221,85 @@ def select_slides(
     n_examples: int = 3,
     split: str = "test",
 ) -> dict[str, list[str]]:
-    frames = []
+    """Select representative slides for each outcome category.
+
+    Selection prefers slides where the outcome is *consistent* across all
+    model×seed combinations — i.e., every run agrees it is a TP/FP/FN/TN.
+    Ties are broken by mean predicted probability (high for TP/FP, low for TN/FN).
+
+    This is analogous to the cross-model consistency used in
+    export_failure_manifest.py, but generalised to all four outcomes.
+    """
+    rows = []
     for name, base in MODELS.items():
-        p = resolve_latest_predictions(Path(base))
-        if p is None:
-            print(f"  SKIP {name}: no predictions found")
+        entries = enumerate_seeds(Path(base))
+        if not entries:
+            print(f"  SKIP {name}: no checkpoints found")
             continue
-        df = pd.read_csv(p)
-        if split != "all":
-            df = df[df["split"] == split]
-        df = df[["slide_id", "label", "prob"]].copy()
-        df["model"] = name
-        frames.append(df)
+        for run_label, cfg_path, ckpt_path in entries:
+            p = Path(base) / "runs" / run_label / "predictions.csv" if cfg_path else None
+            if p is None or not p.exists():
+                # fall back to resolve_latest_predictions for flat layout
+                p = resolve_latest_predictions(Path(base))
+            if p is None or not p.exists():
+                continue
+            df = pd.read_csv(p)
+            if split != "all":
+                df = df[df["split"] == split]
+            df = df[["slide_id", "label", "prob"]].copy()
+            df["model"] = name
+            df["run"] = run_label
+            rows.append(df)
 
-    if not frames:
-        return {"tp": [], "fp": [], "fn": []}
+    if not rows:
+        return {"tp": [], "fp": [], "fn": [], "tn": []}
 
-    combined = pd.concat(frames, ignore_index=True)
+    combined = pd.concat(rows, ignore_index=True)
+    n_runs = combined[["model", "run"]].drop_duplicates().shape[0]
+
+    combined["pred"] = (combined["prob"] >= threshold).astype(int)
+    combined["is_tp"] = ((combined["label"] == 1) & (combined["pred"] == 1)).astype(int)
+    combined["is_fp"] = ((combined["label"] == 0) & (combined["pred"] == 1)).astype(int)
+    combined["is_fn"] = ((combined["label"] == 1) & (combined["pred"] == 0)).astype(int)
+    combined["is_tn"] = ((combined["label"] == 0) & (combined["pred"] == 0)).astype(int)
+
     agg = (
         combined.groupby("slide_id")
-        .agg(label=("label", "first"), mean_prob=("prob", "mean"))
+        .agg(
+            label=("label", "first"),
+            mean_prob=("prob", "mean"),
+            n_tp=("is_tp", "sum"),
+            n_fp=("is_fp", "sum"),
+            n_fn=("is_fn", "sum"),
+            n_tn=("is_tn", "sum"),
+        )
         .reset_index()
     )
 
-    tp = (agg[(agg["label"] == 1) & (agg["mean_prob"] >= threshold)]
-          .sort_values("mean_prob", ascending=False)
+    tp = (agg[agg["label"] == 1]
+          .sort_values(["n_tp", "mean_prob"], ascending=[False, False])
           .head(n_examples)["slide_id"].tolist())
-    fp = (agg[(agg["label"] == 0) & (agg["mean_prob"] >= threshold)]
-          .sort_values("mean_prob", ascending=False)
+    fp = (agg[agg["label"] == 0]
+          .sort_values(["n_fp", "mean_prob"], ascending=[False, False])
           .head(n_examples)["slide_id"].tolist())
-    fn = (agg[(agg["label"] == 1) & (agg["mean_prob"] < threshold)]
-          .sort_values("mean_prob", ascending=True)
+    fn = (agg[agg["label"] == 1]
+          .sort_values(["n_fn", "mean_prob"], ascending=[False, True])
+          .head(n_examples)["slide_id"].tolist())
+    tn = (agg[agg["label"] == 0]
+          .sort_values(["n_tn", "mean_prob"], ascending=[False, True])
           .head(n_examples)["slide_id"].tolist())
 
-    print(f"  Selected {len(tp)} TP, {len(fp)} FP, {len(fn)} FN slides")
-    return {"tp": tp, "fp": fp, "fn": fn}
+    print(f"  {n_runs} model×seed combinations surveyed")
+    print(f"  Selected {len(tp)} TP, {len(fp)} FP, {len(fn)} FN, {len(tn)} TN slides")
+    return {"tp": tp, "fp": fp, "fn": fn, "tn": tn}
 
 
 # ---------------------------------------------------------------------------
 # Plotting helpers
 # ---------------------------------------------------------------------------
 
-OUTCOME_COLORS = {"TP": "#2e7d32", "TN": "#1565c0", "FP": "#e65100", "FN": "#6a1b9a"}
+OUTCOME_COLORS = {"TP": "#2e7d32", "TN": "#1565c0", "FP": "#c62828", "FN": "#6a1b9a"}
+ATTENTION_CMAP = "viridis"  # perceptually uniform; no black/white extremes
 
 
 def _outcome_label(prob: float, true_label: int, threshold: float) -> str:
@@ -276,7 +313,7 @@ def _outcome_label(prob: float, true_label: int, threshold: float) -> str:
 def _scatter_panel(ax, coords, scores_norm, topk_idx, title, prob, outcome: str):
     sc = ax.scatter(
         coords[:, 0], coords[:, 1],
-        c=scores_norm, cmap="hot", s=14, alpha=0.85,
+        c=scores_norm, cmap=ATTENTION_CMAP, s=14, alpha=0.85,
         vmin=0, vmax=1,
     )
     plt.colorbar(sc, ax=ax, label="Log-norm. score", fraction=0.03)
@@ -321,7 +358,7 @@ def make_comparison_figure(
         axes = [axes]
 
     label_str  = "MSI" if label == 1 else "MSS"
-    cat_labels = {"tp": "True Positive", "fp": "False Positive", "fn": "False Negative"}
+    cat_labels = {"tp": "True Positive", "fp": "False Positive", "fn": "False Negative", "tn": "True Negative"}
     fig.suptitle(
         f"{slide_id}  |  True: {label_str}  |  {cat_labels.get(category, category)}  "
         f"|  threshold={threshold:.2f}",
@@ -394,7 +431,7 @@ def make_seed_grid_figure(
                              squeeze=False)
 
     label_str  = "MSI" if label == 1 else "MSS"
-    cat_labels = {"tp": "True Positive", "fp": "False Positive", "fn": "False Negative"}
+    cat_labels = {"tp": "True Positive", "fp": "False Positive", "fn": "False Negative", "tn": "True Negative"}
     fig.suptitle(
         f"{slide_id}  |  True: {label_str}  |  {cat_labels.get(category, category)}",
         fontsize=12, y=1.01,
@@ -431,7 +468,7 @@ def make_seed_grid_figure(
 
             sc = ax.scatter(
                 eff_coords[:, 0], eff_coords[:, 1],
-                c=scores_norm, cmap="hot", s=12, alpha=0.85, vmin=0, vmax=1,
+                c=scores_norm, cmap=ATTENTION_CMAP, s=12, alpha=0.85, vmin=0, vmax=1,
             )
             plt.colorbar(sc, ax=ax, fraction=0.03, label="Log-norm.")
             title = f"{model_name}\nseed {seed_label}  prob={prob:.3f}"
@@ -598,7 +635,8 @@ def main():
                threshold=args.threshold)
     else:
         categories = select_slides(args.threshold, args.n_examples, args.split)
-        for category, slide_ids in categories.items():
+        for category in ("tp", "fp", "fn", "tn"):
+            slide_ids = categories.get(category, [])
             if not slide_ids:
                 print(f"  No slides for category: {category}")
                 continue

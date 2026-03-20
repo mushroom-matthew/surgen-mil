@@ -6,9 +6,8 @@ data:
   val_frac: 0.15
 
 model:
-  name: attention_mil
+  name: mean_pool
   input_dim: 1024
-  attention_dim: 128
   hidden_dim: 256
   dropout: 0.1
 
@@ -17,9 +16,8 @@ optimizer:
   weight_decay: 0.0001
 
 loss:
-  name: focal
-  alpha: 0.5
-  gamma: 2.0
+  name: bce
+  weighted: false
 
 training:
   epochs: 30
@@ -30,4 +28,4 @@ training:
   ema_alpha: 0.7
 
 output:
-  dir: outputs/appendix_attention_focal
+  dir: outputs/appendix/uni_mean_unweighted

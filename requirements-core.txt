@@ -1,0 +1,9 @@
+torch>=2.0.0
+numpy
+scipy
+scikit-learn
+pandas
+matplotlib
+PyYAML
+zarr>=2.12
+tqdm

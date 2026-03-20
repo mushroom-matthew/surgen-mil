@@ -1,0 +1,22 @@
+# Sample config overrides for common use cases.
+# Copy one of the core configs and apply these overrides.
+
+# Override data root (required if your data is not at /mnt/data-surgen)
+data:
+  root: /path/to/your/embeddings
+
+# Override training seed (does not affect the data split)
+training:
+  seed: 99
+
+# Disable early stopping (run for the full epoch budget)
+# training:
+#   early_stopping_patience: null
+
+# Use a smaller patch bag during training (faster, may reduce performance)
+# data:
+#   max_patches: 256
+
+# Switch to unweighted BCE (if classes are balanced)
+# loss:
+#   weighted: false

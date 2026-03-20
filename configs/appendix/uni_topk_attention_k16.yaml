@@ -30,4 +30,4 @@ training:
   ema_alpha: 0.7
 
 output:
-  dir: outputs/appendix_topk_attention
+  dir: outputs/appendix/uni_topk_attention_k16

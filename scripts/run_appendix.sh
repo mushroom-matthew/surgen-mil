@@ -17,10 +17,10 @@ set -euo pipefail
 SEEDS=(42 123 456)
 
 CONFIGS=(
-  configs/appendix_instance_mean.yaml
-  configs/appendix_mean_unweighted.yaml
-  configs/appendix_attention_focal.yaml
-  configs/appendix_topk_attention.yaml
+  configs/appendix/uni_instance_mean.yaml
+  configs/appendix/uni_mean_unweighted.yaml
+  configs/appendix/uni_attention_focal.yaml
+  configs/appendix/uni_topk_attention_k16.yaml
 )
 
 run_model() {
@@ -30,7 +30,7 @@ run_model() {
   echo "[${name}] starting"
   for seed in "${SEEDS[@]}"; do
     echo "[${name}] seed ${seed} — start $(date '+%H:%M:%S')"
-    .venv/bin/python train.py --config "$config" --seed "$seed"
+    python train.py --config "$config" --seed "$seed"
     echo "[${name}] seed ${seed} — done  $(date '+%H:%M:%S')"
   done
   echo "[${name}] all seeds complete"

@@ -26,7 +26,7 @@ run_model() {
   echo "[${name}] starting"
   for seed in "${SEEDS[@]}"; do
     echo "[${name}] seed ${seed} — start $(date '+%H:%M:%S')"
-    .venv/bin/python train.py --config "$config" --seed "$seed"
+    python train.py --config "$config" --seed "$seed"
     echo "[${name}] seed ${seed} — done  $(date '+%H:%M:%S')"
   done
   echo "[${name}] all seeds complete"

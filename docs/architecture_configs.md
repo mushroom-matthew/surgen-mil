@@ -1,10 +1,18 @@
 # Architecture And Training Regimes
 
+> **Note on fair-comparison configs**: The configs documented here (`uni_mean.yaml`,
+> `uni_attention.yaml`, `paper_reproduction.yaml`) are the original exploratory configs.
+> For the main experimental comparison, use the fair-comparison equivalents:
+> `configs/uni_mean_fair.yaml`, `configs/uni_attention_fair.yaml`, and
+> `configs/paper_reproduction_fair.yaml`. The fair-comparison configs fix `split_seed: 0`
+> across all models to ensure identical data splits. Architecture and forward-pass behavior
+> are identical between the original and fair-comparison variants.
+
 This document describes the implemented behavior behind:
 
-- `configs/uni_mean.yaml`
-- `configs/uni_attention.yaml`
-- `configs/paper_reproduction.yaml`
+- `configs/uni_mean.yaml` (see also: `configs/uni_mean_fair.yaml`)
+- `configs/uni_attention.yaml` (see also: `configs/uni_attention_fair.yaml`)
+- `configs/paper_reproduction.yaml` (see also: `configs/paper_reproduction_fair.yaml`)
 
 The goal here is to document the true code path, not just the config intent.
 
@@ -291,9 +299,17 @@ prob >= 0.5 in many analysis scripts"]
 
 ## Source Files
 
+### Original exploratory configs
 - [`configs/uni_mean.yaml`](/home/matthew/projects/surgen-mil/configs/uni_mean.yaml)
 - [`configs/uni_attention.yaml`](/home/matthew/projects/surgen-mil/configs/uni_attention.yaml)
 - [`configs/paper_reproduction.yaml`](/home/matthew/projects/surgen-mil/configs/paper_reproduction.yaml)
+
+### Fair-comparison configs (use these for reproducible experiments)
+- [`configs/uni_mean_fair.yaml`](/home/matthew/projects/surgen-mil/configs/uni_mean_fair.yaml)
+- [`configs/uni_attention_fair.yaml`](/home/matthew/projects/surgen-mil/configs/uni_attention_fair.yaml)
+- [`configs/paper_reproduction_fair.yaml`](/home/matthew/projects/surgen-mil/configs/paper_reproduction_fair.yaml)
+
+### Model implementations
 - [`src/models/aggregators/mean_pool.py`](/home/matthew/projects/surgen-mil/src/models/aggregators/mean_pool.py)
 - [`src/models/aggregators/attention_mil.py`](/home/matthew/projects/surgen-mil/src/models/aggregators/attention_mil.py)
 - [`src/models/aggregators/transformer_mil.py`](/home/matthew/projects/surgen-mil/src/models/aggregators/transformer_mil.py)

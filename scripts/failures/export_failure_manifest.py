@@ -20,35 +20,14 @@ from pathlib import Path
 
 import pandas as pd
 
+# Fair-comparison runs (split_seed=0, seeds 42/123/456) — the canonical set.
+# Each model's runs/ directory is scanned for all numbered seeds; predictions
+# are averaged across seeds before computing FP/FN flags.
 RUNS = {
-    "mean_pool":         "outputs/uni_mean",
-    "attention_mil":     "outputs/uni_attention",
-    "gated_attention":   "outputs/uni_gated_attention",
-    "topk_k4":           "outputs/uni_topk_attention_k4",
+    "mean_pool":      "outputs/uni_mean_fair",
+    "attention_mil":  "outputs/uni_attention_fair",
+    "transformer":    "outputs/paper_reproduction_fair",
 }
-
-
-def _resolve_predictions(base_dir: Path) -> Path | None:
-    """Return path to predictions.csv, handling versioned and flat layouts."""
-    # flat layout
-    flat = base_dir / "predictions.csv"
-    if flat.exists():
-        return flat
-    # versioned: follow latest symlink
-    latest = base_dir / "latest"
-    if latest.exists():
-        p = latest.resolve() / "predictions.csv"
-        if p.exists():
-            return p
-    # versioned: highest-numbered run
-    runs = base_dir / "runs"
-    if runs.is_dir():
-        versions = sorted(d for d in runs.iterdir() if d.is_dir() and d.name.isdigit())
-        for d in reversed(versions):
-            p = d / "predictions.csv"
-            if p.exists():
-                return p
-    return None
 
 
 def extract_cohort(slide_id: str) -> str:
@@ -60,14 +39,60 @@ def extract_case_id(slide_id: str) -> int:
     return int(m.group(1)) if m else -1
 
 
-def load_run(run_dir: Path, split: str) -> pd.DataFrame | None:
-    p = _resolve_predictions(run_dir)
-    if p is None:
+def youden_threshold(val_df: pd.DataFrame, n: int = 500) -> float:
+    """Threshold that maximises Youden's J (sensitivity + specificity - 1) on val_df."""
+    import numpy as np
+    y_true  = val_df["label"].values
+    y_score = val_df["prob"].values
+    if len(set(y_true)) < 2:
+        return 0.5
+    best_j, best_t = -1.0, 0.5
+    for t in np.linspace(0, 1, n):
+        y_pred = (y_score >= t).astype(int)
+        tp = ((y_pred == 1) & (y_true == 1)).sum()
+        tn = ((y_pred == 0) & (y_true == 0)).sum()
+        fp = ((y_pred == 1) & (y_true == 0)).sum()
+        fn = ((y_pred == 0) & (y_true == 1)).sum()
+        j = tp / max(tp + fn, 1) + tn / max(tn + fp, 1) - 1
+        if j > best_j:
+            best_j, best_t = j, t
+    return best_t
+
+
+def load_averaged_predictions(base_dir: Path, split: str) -> pd.DataFrame | None:
+    """Load predictions.csv from all numbered seed runs and average prob per slide.
+
+    Returns a DataFrame with columns [slide_id, label, prob, split, n_seeds],
+    where prob is the mean predicted probability across all seeds.  If the runs/
+    directory does not exist or contains no valid predictions, returns None.
+    """
+    runs_dir = base_dir / "runs"
+    frames = []
+    if runs_dir.is_dir():
+        for d in sorted(runs_dir.iterdir()):
+            if not (d.is_dir() and d.name.isdigit()):
+                continue
+            p = d / "predictions.csv"
+            if p.exists():
+                frames.append(pd.read_csv(p))
+
+    if not frames:
         return None
-    df = pd.read_csv(p)
+
+    combined = pd.concat(frames, ignore_index=True)
     if split != "all":
-        df = df[df["split"] == split].reset_index(drop=True)
-    return df
+        combined = combined[combined["split"] == split]
+
+    if combined.empty:
+        return None
+
+    averaged = (
+        combined.groupby("slide_id")
+        .agg(label=("label", "first"), prob=("prob", "mean"),
+             split=("split", "first"), n_seeds=("prob", "count"))
+        .reset_index()
+    )
+    return averaged
 
 
 def main():
@@ -82,14 +107,27 @@ def main():
     )
     args = parser.parse_args()
 
-    frames: dict[str, pd.DataFrame] = {}
+    frames: dict[str, pd.DataFrame] = {}     # test predictions, indexed by slide_id
+    thresholds: dict[str, float] = {}         # per-model optimal val threshold
     for key, run_dir in RUNS.items():
-        df = load_run(Path(run_dir), args.split)
-        if df is None:
-            print(f"  SKIP {key} (no predictions.csv)")
+        test_df = load_averaged_predictions(Path(run_dir), args.split)
+        if test_df is None:
+            print(f"  SKIP {key} (no runs found in {run_dir})")
             continue
-        frames[key] = df.set_index("slide_id")
-        print(f"  loaded {key}  ({len(df)} slides)")
+        n_seeds = int(test_df["n_seeds"].max())
+
+        val_df = load_averaged_predictions(Path(run_dir), "val")
+        if val_df is not None and val_df["label"].nunique() >= 2:
+            t = youden_threshold(val_df)
+            source = "Youden J (val)"
+        else:
+            t = args.threshold
+            source = f"fallback ({args.threshold})"
+
+        thresholds[key] = t
+        frames[key] = test_df.set_index("slide_id")
+        print(f"  loaded {key}  ({len(test_df)} slides, {n_seeds} seeds averaged)"
+              f"  threshold={t:.3f}  [{source}]")
 
     if not frames:
         print("No runs found.")
@@ -119,7 +157,7 @@ def main():
             r = df.loc[slide_id]
             prob = float(r["prob"])
             label = int(r["label"])
-            pred = int(prob >= args.threshold)
+            pred = int(prob >= thresholds[key])
             is_fp = int(label == 0 and pred == 1)
             is_fn = int(label == 1 and pred == 0)
             row[f"prob_{key}"] = round(prob, 4)
@@ -140,9 +178,10 @@ def main():
     # Summary prints
     n_models = len(frames)
     min_models = args.min_models if args.min_models is not None else -(-n_models // 2)
+    threshold_str = ", ".join(f"{k}={v:.3f}" for k, v in thresholds.items())
     print(
-        f"\nManifest: {len(manifest)} slides, {n_models} models, "
-        f"threshold={args.threshold}, showing errors in >= {min_models} models"
+        f"\nManifest: {len(manifest)} slides, {n_models} models (seeds averaged), "
+        f"thresholds=[{threshold_str}], showing errors in >= {min_models} models"
     )
 
     pos = manifest[manifest["label"] == 1]
