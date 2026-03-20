@@ -11,7 +11,7 @@ model:
   attention_dim: 128
   hidden_dim: 256
   dropout: 0.1
-  k: 16            # ~3% of a 512-patch bag; closest train-time analogue to top-5% test truncation
+  k: 16            # ≈3% of the 512-patch training bag; eval bags are full-size so fraction varies
 
 optimizer:
   lr: 0.0001

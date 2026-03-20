@@ -45,6 +45,7 @@ MODELS: dict[str, str] = {
     "Gated Attention":      "outputs/uni_gated_attention",
     "Top-k (k=4)":          "outputs/uni_topk_attention_k4",
     # Fair comparison runs
+    "MeanPool (fair)":      "outputs/uni_mean_fair",
     "Attn MIL (fair)":      "outputs/uni_attention_fair",
     "Paper Repro (fair)":   "outputs/paper_reproduction_fair",
 }

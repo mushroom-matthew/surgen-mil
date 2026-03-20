@@ -50,6 +50,22 @@ bash scripts/run_appendix.sh
 python train.py --config configs/uni_mean_fair.yaml --seed 42
 ```
 
+## Bag Sampling Protocol
+
+- When `data.max_patches` is set, training uses a train-time bag sampler and validation/test use full bags.
+- The sampled training bag is **not** fixed once per run.
+- Sampling happens inside dataset `__getitem__`, so each time a slide is fetched during training a fresh subset can be drawn.
+- In practice this means the bag is re-sampled across epochs and acts like within-slide stochastic augmentation.
+- This is intentional: fixing one truncated bag per slide would turn bag construction into a one-time lossy preprocessing step and can overfit to an accidental subset of patches.
+- If `data.max_patches: null`, full bags are used in both training and evaluation.
+
+For the Phase 1 sampler ablation, the intended comparison is therefore:
+- same split
+- same seed set
+- same `max_patches=512`
+- same full-bag evaluation
+- different **re-sampled** train-time bag construction rules
+
 ## Checkpoint Selection Logic
 
 1. After each epoch, validate on `val` split using `val_auprc`.

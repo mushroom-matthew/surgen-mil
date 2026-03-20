@@ -68,8 +68,10 @@ threshold = _youden_threshold(val_labels, val_probs)
 
 ## GPU Requirements
 
-Training requires a CUDA GPU (tested on A100 and V100).
-Inference can run on CPU, but will be slower for large slides.
+Training and inference were developed and tested on an NVIDIA Tesla T4.
+A CUDA GPU is strongly recommended for training; the codebase will fall back to CPU
+automatically but training will be very slow without one.
+Inference on CPU is practical for small slide counts.
 
 The codebase automatically falls back to CPU if CUDA is unavailable:
 ```python

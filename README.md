@@ -13,12 +13,23 @@ data scale.
 
 ## Main Findings
 
+| Model | AUROC (mean ± std) | AUPRC (mean ± std) |
+|-------|--------------------|--------------------|
+| MeanPool (weighted BCE) | **0.860 ± 0.005** | 0.447 ± 0.019 |
+| AttentionMIL (weighted BCE) | 0.869 ± 0.020 | 0.381 ± 0.052 |
+| TransformerMIL (unweighted BCE, Adam) | 0.806 ± 0.057 | 0.391 ± 0.116 |
+| *Paper baseline (Myles et al.)* | *0.827* | *—* |
+
+*3 seeds × fixed split (split_seed=0), temperature scaling. See `docs/results_summary.md`.*
+
+![Confusion matrices](docs/figures/fair_comparison_confusion_matrices.png)
+
 - **Frozen UNI embeddings are strongly discriminative** for MSI/MMR status without any fine-tuning.
 - **Mean pooling is the most stable baseline**: consistent performance across seeds, low variance.
-- **AttentionMIL is competitive but seed-dependent**: higher peak performance than mean pooling
-  in some runs, but higher variance — suggesting training instability at this sample size.
-- **TransformerMIL (6.8M params) is not justified** in this data regime: no improvement over
-  simpler aggregators, higher compute cost.
+- **AttentionMIL is competitive but seed-dependent**: higher peak performance in some runs,
+  but 4× higher AUROC variance — suggesting training instability at this sample size.
+- **TransformerMIL (6.8M params) is not justified** in this data regime: lowest mean AUROC,
+  highest variance, highest compute cost.
 - **Sparse evidence selection (top-k attention)** is conditionally useful but not robustly superior
   to full-bag attention.
 
@@ -46,7 +57,9 @@ surgen-mil/
     make_figures.py            # generate ROC/PR figures
     export_predictions.py      # export per-slide predictions from checkpoint
     inspect_attention.py       # attention weight diagnostics
+    sampler_diagnostics.py     # quantify sampler coverage/diversity on real slides
     run_fair_comparison.sh     # train all 3 models x 3 seeds
+    run_phase1_sampler_ablation.sh  # train mean/attention x sampler ablation
     run_appendix.sh            # train appendix models x 3 seeds
     analyse.py                 # cohort-level analysis
     seed_comparison.py         # detailed multi-seed aggregation
@@ -61,6 +74,7 @@ surgen-mil/
     future_work.md
     packaging_and_deployment.md
     architecture_configs.md
+    attention_visualization.md
   tests/                       # unit tests (no real data required)
   examples/                    # sample manifest, config overrides, expected outputs
 ```
@@ -97,6 +111,10 @@ python scripts/evaluate.py \
   --config configs/uni_mean_fair.yaml \
   --checkpoint outputs/uni_mean_fair/runs/001/model.pt
 ```
+
+Training note:
+- When `data.max_patches` is set, train-time patch bags are sampled on fetch, so the same slide can be seen with different patch subsets across epochs.
+- Validation and test remain full-bag by default.
 
 ---
 
@@ -141,11 +159,52 @@ python scripts/compare_models.py \
 # Train appendix models
 bash scripts/run_appendix.sh
 
+# Train Phase 1 sampler ablation
+bash scripts/run_phase1_sampler_ablation.sh
+
+# Validate sampler behaviour before training:
+python scripts/sampler_diagnostics.py \
+  --configs configs/appendix/phase1_mean_random.yaml \
+            configs/appendix/phase1_mean_spatial.yaml \
+            configs/appendix/phase1_mean_feature_diverse.yaml \
+  --split train --repeats 3 --out outputs/sampler_diagnostics
+
 # Generate appendix tables (A, B, C)
 python scripts/appendix_tables.py --out outputs/appendix_tables.csv
 ```
 
 See `docs/appendix.md` for interpretation of each section.
+
+---
+
+## Attention Visualization
+
+Attention-MIL models produce per-patch scores that can be projected back onto slide coordinates to
+show which tissue regions the model focuses on. The script auto-selects consistent TP/FP/FN/TN
+examples across all model×seed combinations:
+
+```bash
+# Auto-select representative TP/FP/FN/TN slides (3 per category)
+make attn-auto
+
+# Or directly:
+python scripts/failures/compare_attention.py \
+    --auto --n_examples 3 --topk 100 --out outputs/attention_viz
+```
+
+Slides are selected by cross-model consistency: the examples shown are the most robustly
+classified slides in the test set across all model×seed combinations.
+
+False positive (true MSS, all models predict MSI — systematic failure):
+
+![FP attention example](docs/figures/attn_fp_SR1482_T061.png)
+
+True negative (true MSS, all models correctly suppress):
+
+![TN attention example](docs/figures/attn_tn_SR386_T129.png)
+
+See `docs/attention_visualization.md` for full usage, figure layout, colormap details,
+and interpretation guidance.
 
 ---
 

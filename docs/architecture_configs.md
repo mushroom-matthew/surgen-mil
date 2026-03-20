@@ -5,8 +5,12 @@
 > For the main experimental comparison, use the fair-comparison equivalents:
 > `configs/uni_mean_fair.yaml`, `configs/uni_attention_fair.yaml`, and
 > `configs/paper_reproduction_fair.yaml`. The fair-comparison configs fix `split_seed: 0`
-> across all models to ensure identical data splits. Architecture and forward-pass behavior
-> are identical between the original and fair-comparison variants.
+> across all models to ensure identical data splits. **Forward-pass architecture is identical**
+> between the original and fair-comparison variants. However, the training regimes differ
+> significantly for `paper_reproduction_fair.yaml` vs `paper_reproduction.yaml`: the fair
+> version uses 512-patch sampling, AdamW, weighted BCE, early stopping, and EMA — none of
+> which are present in the original. The fair-comparison configs should be treated as a
+> separate training protocol, not a drop-in replacement.
 
 This document describes the implemented behavior behind:
 
@@ -174,6 +178,8 @@ prob >= 0.5 in many analysis scripts"]
 ### Training regime notes
 
 - Training bags are patch-sampled with `RandomPatchSampler(max_patches=512)`.
+- The 512-patch training bag is drawn on fetch, not precomputed once per slide.
+- In practice, the sampled subset can change across epochs because sampling happens inside dataset `__getitem__`.
 - Validation and test use full bags.
 - Selection metric is `val_auprc`, smoothed with EMA before checkpoint selection.
 - Although this is called "mean pool", the classifier head is a 2-layer MLP, not a single linear probe.
@@ -219,6 +225,8 @@ prob >= 0.5 in many analysis scripts"]
 ### Training regime notes
 
 - Training bags are patch-sampled with `RandomPatchSampler(max_patches=512)`.
+- The 512-patch training bag is drawn on fetch, not fixed for the whole run.
+- This means training sees different subsets of the same slide across epochs.
 - Validation and test use full bags.
 - Selection metric is `val_auprc`, smoothed with EMA using `ema_alpha=0.7`.
 - The interaction to pay attention to is:
@@ -275,6 +283,7 @@ prob >= 0.5 in many analysis scripts"]
 ### Training regime notes
 
 - Full bags are used in training and evaluation because `max_patches: null`.
+- There is no train-time bag resampling in this config because no truncation is applied.
 - Optimizer is `Adam`, not `AdamW`.
 - Class weighting is disabled.
 - AMP is enabled if CUDA is available.
