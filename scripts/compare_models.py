@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-# Paper baseline AUROC for reference (Sirinukunwattana et al.)
+# Paper baseline AUROC for reference (Myles et al., GigaScience 2025, doi:10.1093/gigascience/giaf086)
 PAPER_AUROC = 0.8273
 
 PALETTE = [

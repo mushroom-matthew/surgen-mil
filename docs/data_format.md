@@ -1,5 +1,9 @@
 # Data Format
 
+Dataset: [github.com/CraigMyles/SurGen-Dataset](https://github.com/CraigMyles/SurGen-Dataset)
+Dataset DOI: https://doi.org/10.6019/S-BIAD1285
+Paper: https://doi.org/10.1093/gigascience/giaf086
+
 ## Directory Structure
 
 ```
@@ -36,18 +40,53 @@ coords = z["coords"][:]      # np.ndarray [N, 2]
 
 ### SR1482_labels.csv
 
-| Column | Type | Values |
-|--------|------|--------|
+| Column | Type | Observed values |
+|--------|------|-----------------|
 | `case_id` | int | Patient identifier |
-| `MSI` | str | `"MSI HIGH"` or `"NO MSI"` |
-| `MMR` | str | `"MMR loss"` or `"No loss"` |
+| `MSI` | str | `"MSI HIGH"`, `"NO MSI"`, `"MSI LOW"`, `"Not performed"`, `"Insufficient"`, `"Failed"` |
+| `MMR` | str | `"MMR loss"`, `"No loss"`, `"Not performed"` |
+
+**Binary label derivation** (`src/data/feature_provider.py: _resolve_sr1482_state`):
+
+Each column is first mapped to an intermediate state:
+
+| `MSI` value | State |
+|-------------|-------|
+| `"MSI HIGH"` | positive |
+| `"NO MSI"` | negative |
+| `"MSI LOW"`, `"Not performed"`, `"Insufficient"`, `"Failed"` | unknown |
+
+| `MMR` value | State |
+|-------------|-------|
+| any string containing `"loss"` | positive |
+| `"No loss"` | negative |
+| `"Not performed"` | unknown |
+
+The two states are then reconciled into a final binary label:
+
+| MSI state | MMR state | Final label | Note |
+|-----------|-----------|-------------|------|
+| positive | positive | **1** | basis: MSI+MMR |
+| positive | unknown | **1** | basis: MSI |
+| unknown | positive | **1** | basis: MMR |
+| negative | negative | **0** | basis: MSI+MMR |
+| negative | unknown | **0** | basis: MSI |
+| unknown | negative | **0** | basis: MMR |
+| positive | negative | excluded | discordant — case dropped |
+| unknown | unknown | excluded | insufficient evidence — case dropped |
+
+Discordant and unknown cases are silently excluded from the dataset;
+their slides never appear in any split.
 
 ### SR386_labels.csv
 
 | Column | Type | Values |
 |--------|------|--------|
 | `case_id` | int | Patient identifier |
-| `mmr_loss_binary` | int | `1` = MMR loss, `0` = no loss |
+| `mmr_loss_binary` | int | `1` = positive (MMR loss), `0` = negative, NaN = excluded |
+
+**Binary label derivation**: `mmr_loss_binary` is used directly as the label.
+Cases with a NaN value are excluded.
 
 ## Slide ID Naming Convention
 

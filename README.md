@@ -207,3 +207,11 @@ See `docs/future_work.md` for a detailed roadmap.
 
 This repository is a take-home research artifact. If you use this codebase, please cite the SurGen
 dataset and the UNI foundation model paper.
+
+**SurGen dataset**
+- GitHub: https://github.com/CraigMyles/SurGen-Dataset
+- Dataset DOI: https://doi.org/10.6019/S-BIAD1285
+- Paper: https://doi.org/10.1093/gigascience/giaf086
+
+**UNI foundation model**
+- Chen, R.J. et al. (2024). Towards a general-purpose foundation model for computational pathology. *Nature Medicine*.

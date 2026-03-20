@@ -1,5 +1,14 @@
 # Reproducibility
 
+## Label Binarisation
+
+SR1482 labels are derived by reconciling the `MSI` and `MMR` columns independently (see
+`docs/data_format.md`). Cases that are discordant (one column positive, the other negative)
+or where both columns are unknown are excluded from all splits. The effective dataset size
+is therefore smaller than the total row count in the CSV.
+
+SR386 uses `mmr_loss_binary` directly; NaN rows are excluded.
+
 ## Seeds
 
 | Purpose | Values |
