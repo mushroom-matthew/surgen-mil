@@ -47,6 +47,8 @@ Frozen UNI embeddings contain strong discriminative signal for MSI/MMR predictio
 Mean pooling is the most stable baseline. AttentionMIL is competitive but seed-sensitive.
 TransformerMIL is not justified in this data regime (sample size, label quality).
 
+> REVIEW: These are interpretive summary claims, not purely descriptive results. "strong discriminative signal," "competitive," and especially "not justified" should be qualified as interpretation from one fixed-split, three-seed comparison.
+
 See `docs/results_summary.md` for the full performance table and interpretation.
 
 ## Design Choices

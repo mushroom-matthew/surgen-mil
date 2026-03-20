@@ -9,7 +9,13 @@ import zarr
 
 from src.data.dataset import SurgenBagDataset
 from src.data.feature_provider import UniFeatureProvider
-from src.data.sampler import FullBagSampler, RandomPatchSampler
+from src.data.sampler import (
+    FeatureDiversePatchSampler,
+    FullBagSampler,
+    RandomPatchSampler,
+    SpatialBalancedPatchSampler,
+    build_patch_sampler,
+)
 from src.data.splits import case_grouped_stratified_split
 
 
@@ -76,6 +82,100 @@ def test_random_patch_sampler_limits():
 
         item = ds[0]
         assert item["features"].shape[0] <= 5
+
+
+def test_build_patch_sampler_defaults_to_random():
+    sampler = build_patch_sampler({"max_patches": 16})
+    assert isinstance(sampler, RandomPatchSampler)
+
+
+def test_build_patch_sampler_supports_spatial_balanced():
+    sampler = build_patch_sampler({
+        "max_patches": 16,
+        "sampler": {"name": "spatial_balanced", "grid_size": 4},
+    })
+    assert isinstance(sampler, SpatialBalancedPatchSampler)
+
+
+def test_build_patch_sampler_supports_feature_diverse():
+    sampler = build_patch_sampler({
+        "max_patches": 16,
+        "sampler": {"name": "feature_diverse", "proj_dim": 8, "candidate_pool_size": 32},
+    })
+    assert isinstance(sampler, FeatureDiversePatchSampler)
+
+
+def test_spatial_balanced_sampler_spreads_across_cells():
+    np.random.seed(0)
+    coords = []
+    features = []
+    # Four well-separated spatial quadrants with dense local redundancy inside each.
+    for cx, cy in [(0, 0), (100, 0), (0, 100), (100, 100)]:
+        for _ in range(25):
+            coords.append([cx + np.random.randn() * 2, cy + np.random.randn() * 2])
+            features.append(np.random.randn(8))
+
+    coords = np.array(coords, dtype=np.float32)
+    features = np.array(features, dtype=np.float32)
+
+    def quadrant_coverage(sampled_coords: np.ndarray) -> int:
+        x_bin = (sampled_coords[:, 0] > 50).astype(int)
+        y_bin = (sampled_coords[:, 1] > 50).astype(int)
+        return len(set(zip(x_bin, y_bin)))
+
+    random_coverages = []
+    balanced_coverages = []
+    for seed in range(5):
+        np.random.seed(seed)
+        _, random_coords = RandomPatchSampler(max_patches=4)(features, coords)
+        np.random.seed(seed)
+        _, balanced_coords = SpatialBalancedPatchSampler(max_patches=4, grid_size=2)(features, coords)
+        random_coverages.append(quadrant_coverage(random_coords))
+        balanced_coverages.append(quadrant_coverage(balanced_coords))
+
+    assert balanced_coverages == [4, 4, 4, 4, 4]
+    assert min(balanced_coverages) > min(random_coverages)
+    assert sum(balanced_coverages) > sum(random_coverages)
+
+
+def test_feature_diverse_sampler_improves_feature_separation():
+    np.random.seed(0)
+    centers = np.eye(4, dtype=np.float32)
+    features = []
+    coords = []
+    # Four feature clusters with many near-duplicates; a diverse sampler should avoid
+    # selecting multiple almost-identical points from the same cluster.
+    for center in centers:
+        for _ in range(25):
+            features.append(center + 0.05 * np.random.randn(4))
+            coords.append(np.random.randn(2))
+
+    features = np.array(features, dtype=np.float32)
+    coords = np.array(coords, dtype=np.float32)
+
+    def min_pairwise_distance(x: np.ndarray) -> float:
+        dists = []
+        for i in range(len(x)):
+            for j in range(i + 1, len(x)):
+                dists.append(float(np.linalg.norm(x[i] - x[j])))
+        return min(dists)
+
+    random_spreads = []
+    diverse_spreads = []
+    for seed in range(5):
+        np.random.seed(seed)
+        random_features, _ = RandomPatchSampler(max_patches=4)(features, coords)
+        np.random.seed(seed)
+        diverse_features, diverse_coords = FeatureDiversePatchSampler(
+            max_patches=4, proj_dim=4, candidate_pool_size=100
+        )(features, coords)
+        random_spreads.append(min_pairwise_distance(random_features))
+        diverse_spreads.append(min_pairwise_distance(diverse_features))
+        assert diverse_features.shape[0] == 4
+        assert diverse_coords.shape[0] == 4
+
+    assert sum(diverse_spreads) > sum(random_spreads)
+    assert min(diverse_spreads) > min(random_spreads)
 
 
 def test_case_grouped_split_non_overlapping():

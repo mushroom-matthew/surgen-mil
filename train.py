@@ -18,7 +18,7 @@ from tqdm import tqdm
 
 from src.data.dataset import SurgenBagDataset
 from src.data.feature_provider import UniFeatureProvider
-from src.data.sampler import FullBagSampler, RandomPatchSampler
+from src.data.sampler import FullBagSampler, build_patch_sampler
 from src.data.splits import case_grouped_stratified_split
 from src.losses import build_loss
 from src.models.build import build_model
@@ -58,6 +58,9 @@ def collate_one(batch):
 def build_loaders(cfg):
     provider = UniFeatureProvider(cfg["data"]["root"])
     all_indices = list(range(len(provider)))
+    train_num_workers = cfg["data"].get("train_num_workers", 4)
+    eval_num_workers = cfg["data"].get("eval_num_workers", 2)
+    pin_memory = cfg["data"].get("pin_memory", True)
 
     split_seed = cfg["data"].get("split_seed", cfg["training"]["seed"])
     train_idx, val_idx, test_idx = case_grouped_stratified_split(
@@ -68,8 +71,7 @@ def build_loaders(cfg):
         seed=split_seed,
     )
 
-    max_patches = cfg["data"].get("max_patches")
-    train_sampler = FullBagSampler() if not max_patches else RandomPatchSampler(max_patches=max_patches)
+    train_sampler = build_patch_sampler(cfg["data"])
     eval_sampler = FullBagSampler()
 
     train_ds = SurgenBagDataset(provider, indices=train_idx, sampler=train_sampler)
@@ -78,15 +80,15 @@ def build_loaders(cfg):
 
     train_loader = DataLoader(
         train_ds, batch_size=1, shuffle=True, collate_fn=collate_one,
-        num_workers=4, pin_memory=True,
+        num_workers=train_num_workers, pin_memory=pin_memory,
     )
     val_loader = DataLoader(
         val_ds, batch_size=1, shuffle=False, collate_fn=collate_one,
-        num_workers=2, pin_memory=True,
+        num_workers=eval_num_workers, pin_memory=pin_memory,
     )
     test_loader = DataLoader(
         test_ds, batch_size=1, shuffle=False, collate_fn=collate_one,
-        num_workers=2, pin_memory=True,
+        num_workers=eval_num_workers, pin_memory=pin_memory,
     )
 
     return provider, train_loader, val_loader, test_loader, train_idx, val_idx, test_idx

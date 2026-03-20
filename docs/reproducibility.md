@@ -59,6 +59,8 @@ python train.py --config configs/uni_mean_fair.yaml --seed 42
 - This is intentional: fixing one truncated bag per slide would turn bag construction into a one-time lossy preprocessing step and can overfit to an accidental subset of patches.
 - If `data.max_patches: null`, full bags are used in both training and evaluation.
 
+> REVIEW: The first three bullets are implementation facts. "acts like within-slide stochastic augmentation," "lossy preprocessing," and "can overfit" are plausible interpretations but not directly demonstrated in this repository unless backed by an explicit ablation.
+
 For the Phase 1 sampler ablation, the intended comparison is therefore:
 - same split
 - same seed set
@@ -102,3 +104,5 @@ Two threshold conventions are used:
    Computed in `scripts/appendix_tables.py` (`_youden_threshold` function).
 
 For deployment, we recommend the Youden J threshold fit on validation data.
+
+> REVIEW: "For deployment, we recommend..." is too strong without an evaluation tailored to deployment conditions. This repository does not provide external validation or a deployment study.

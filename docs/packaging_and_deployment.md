@@ -60,11 +60,15 @@ Two thresholds are available:
 | Default | 0.5 | Use when calibration is unknown |
 | Youden J | Fit on val | Use for clinical decision support |
 
+> REVIEW: "Use for clinical decision support" is too strong for this repository. There is no clinical validation, external validation cohort, or deployment study here.
+
 The Youden J threshold is computed in `scripts/appendix_tables.py`:
 ```python
 from scripts.appendix_tables import _youden_threshold
-threshold = _youden_threshold(val_labels, val_probs)
+threshold = _youden_threshold(preds_df)
 ```
+
+> REVIEW: The previous example signature was incorrect. `_youden_threshold` takes a predictions DataFrame, not separate label/prob arrays.
 
 ## GPU Requirements
 
@@ -72,6 +76,8 @@ Training and inference were developed and tested on an NVIDIA Tesla T4.
 A CUDA GPU is strongly recommended for training; the codebase will fall back to CPU
 automatically but training will be very slow without one.
 Inference on CPU is practical for small slide counts.
+
+> REVIEW: Keep this only if you can personally vouch for the T4 testing statement. "strongly recommended" and "practical" are reasonable operational judgments, but they are still informal unless backed by benchmark numbers.
 
 The codebase automatically falls back to CPU if CUDA is unavailable:
 ```python

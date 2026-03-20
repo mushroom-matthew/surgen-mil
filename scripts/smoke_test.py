@@ -41,6 +41,9 @@ def make_config(root: Path) -> Path:
             "max_patches": 10,
             "train_frac": 0.6,
             "val_frac": 0.2,
+            "train_num_workers": 0,
+            "eval_num_workers": 0,
+            "pin_memory": False,
         },
         "model": {
             "name": "mean_pool",

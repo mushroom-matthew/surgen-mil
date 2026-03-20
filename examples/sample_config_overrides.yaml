@@ -17,6 +17,22 @@ training:
 # data:
 #   max_patches: 256
 
+# Swap train-time patch sampler while keeping eval on full bags
+# The sampled training bag is drawn on fetch, so it can differ across epochs.
+# data:
+#   max_patches: 512
+#   sampler:
+#     name: spatial_balanced
+#     grid_size: 8
+
+# Or use feature-space coverage instead of spatial coverage
+# data:
+#   max_patches: 512
+#   sampler:
+#     name: feature_diverse
+#     proj_dim: 32
+#     candidate_pool_size: 2048
+
 # Switch to unweighted BCE (if classes are balanced)
 # loss:
 #   weighted: false

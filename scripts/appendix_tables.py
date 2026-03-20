@@ -41,6 +41,18 @@ APPENDIX_C_TRAIN = {
     "Top-k attention (k=16, train)": "outputs/appendix_topk_attention",
 }
 
+APPENDIX_D_MEAN = {
+    "MeanPool + random":           "outputs/appendix/phase1_mean_random",
+    "MeanPool + spatial balanced": "outputs/appendix/phase1_mean_spatial",
+    "MeanPool + feature diverse":  "outputs/appendix/phase1_mean_feature_diverse",
+}
+
+APPENDIX_D_ATTN = {
+    "AttentionMIL + random":           "outputs/appendix/phase1_attention_random",
+    "AttentionMIL + spatial balanced": "outputs/appendix/phase1_attention_spatial",
+    "AttentionMIL + feature diverse":  "outputs/appendix/phase1_attention_feature_diverse",
+}
+
 # The test-time truncation row is computed inline from uni_attention_fair.
 ATTENTION_FAIR_DIR = Path("outputs/uni_attention_fair")
 
@@ -367,6 +379,46 @@ def _conclude_c(rows: list[dict]) -> str:
     return f'  "{sentence[0].upper() + sentence[1:]}"'
 
 
+def _conclude_d(rows_mean: list[dict], rows_attn: list[dict]) -> str:
+    """Appendix D: summarise whether diversity helps performance and/or stability."""
+    have = [r for r in rows_mean + rows_attn if r["n_seeds"] > 0]
+    if not have:
+        return "  (insufficient data to draw conclusion)"
+
+    by_name = {r["model"]: r for r in have}
+
+    def _best(rows: list[dict], key: str):
+        valid = [r for r in rows if r["n_seeds"] > 0]
+        if not valid:
+            return None
+        return max(valid, key=lambda r: r[key])
+
+    mean_best = _best(rows_mean, "auprc_mean")
+    attn_best = _best(rows_attn, "auprc_mean")
+
+    parts = []
+    if mean_best is not None:
+        parts.append(
+            f"for MeanPool, the strongest sampler by mean AUPRC was {mean_best['model']} "
+            f"({mean_best['auprc_mean']:.3f} ± {mean_best['auprc_std']:.3f})"
+        )
+    if attn_best is not None:
+        parts.append(
+            f"for AttentionMIL, the strongest sampler by mean AUPRC was {attn_best['model']} "
+            f"({attn_best['auprc_mean']:.3f} ± {attn_best['auprc_std']:.3f})"
+        )
+
+    if not parts:
+        return "  (insufficient data to draw conclusion)"
+
+    sentence = (
+        "Sampler choice changed the effective training signal while evaluation remained full-bag; "
+        + "; ".join(parts)
+        + ". Interpret any gain as a training-time evidence exposure effect first, then check whether it also reduces seed variance."
+    )
+    return f'  "{sentence}"'
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -400,9 +452,28 @@ def main():
     _print_table(rows_c, "Appendix C — Train-time vs test-time sparsity")
     print(_conclude_c(rows_c))
 
+    # --- Appendix D ---
+    rows_d_mean = [_summarise(d, n) for n, d in APPENDIX_D_MEAN.items()]
+    rows_d_attn = [_summarise(d, n) for n, d in APPENDIX_D_ATTN.items()]
+    _print_table(rows_d_mean, "Appendix D — Train-time sampler ablation (MeanPool)")
+    _print_table(rows_d_attn, "Appendix D — Train-time sampler ablation (AttentionMIL)")
+    print(_conclude_d(rows_d_mean, rows_d_attn))
+
     # --- Optional CSV ---
     if args.out:
-        all_rows = rows_a + rows_b + rows_c
+        for r in rows_a:
+            r["section"] = "Appendix A"
+        for r in rows_b:
+            r["section"] = "Appendix B"
+        for r in rows_c:
+            r["section"] = "Appendix C"
+        for r in rows_d_mean:
+            r["section"] = "Appendix D"
+            r["family"] = "MeanPool"
+        for r in rows_d_attn:
+            r["section"] = "Appendix D"
+            r["family"] = "AttentionMIL"
+        all_rows = rows_a + rows_b + rows_c + rows_d_mean + rows_d_attn
         pd.DataFrame(all_rows).to_csv(args.out, index=False)
         print(f"\nSaved summary to {args.out}")
 

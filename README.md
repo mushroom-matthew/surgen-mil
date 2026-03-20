@@ -9,6 +9,8 @@ conditions. The core finding is that frozen UNI embeddings already contain stron
 signal, and simple pooled baselines are competitive with more expressive architectures at this
 data scale.
 
+> REVIEW: "identical experimental conditions" appears too strong for the current fair configs. `paper_reproduction_fair.yaml` differs from the other fair configs in epochs and AMP settings, and the repo separately documents that training regimes differ across variants. "strong discriminative signal" and "competitive" are interpretive claims rather than direct measurements.
+
 ---
 
 ## Main Findings
@@ -19,6 +21,8 @@ data scale.
 | AttentionMIL (weighted BCE) | 0.869 ± 0.020 | 0.381 ± 0.052 |
 | TransformerMIL (unweighted BCE, Adam) | 0.806 ± 0.057 | 0.391 ± 0.116 |
 | *Paper baseline (Myles et al.)* | *0.827* | *—* |
+
+> REVIEW: The TransformerMIL row label does not match the current `configs/paper_reproduction_fair.yaml`, which uses weighted BCE and AdamW. Verify whether the table reflects older runs or stale wording. Also cite the source for the paper baseline value `0.827` locally or in the caption.
 
 *3 seeds × fixed split (split_seed=0), temperature scaling. See `docs/results_summary.md`.*
 
@@ -32,6 +36,8 @@ data scale.
   highest variance, highest compute cost.
 - **Sparse evidence selection (top-k attention)** is conditionally useful but not robustly superior
   to full-bag attention.
+
+> REVIEW: This whole bullet list mixes measured outcomes with stronger interpretation and recommendation. "strongly discriminative," "competitive," "training instability," "not justified," and "conditionally useful" should be either supported by explicit analysis or marked as interpretation. "4× higher AUROC variance" should also be presented as an observed ratio from this experiment, not a general conclusion.
 
 ---
 
@@ -183,6 +189,8 @@ Attention-MIL models produce per-patch scores that can be projected back onto sl
 show which tissue regions the model focuses on. The script auto-selects consistent TP/FP/FN/TN
 examples across all model×seed combinations:
 
+> REVIEW: "focuses on" is common shorthand, but it still implies interpretability. Consider clarifying that these are model-derived attention or attribution scores, not validated pathology ground truth.
+
 ```bash
 # Auto-select representative TP/FP/FN/TN slides (3 per category)
 make attn-auto
@@ -194,6 +202,8 @@ python scripts/failures/compare_attention.py \
 
 Slides are selected by cross-model consistency: the examples shown are the most robustly
 classified slides in the test set across all model×seed combinations.
+
+> REVIEW: This overstates the selector. The code ranks by TP/FP/FN/TN counts and mean probability; it does not require unanimity across all model×seed combinations.
 
 False positive (true MSS, all models predict MSI — systematic failure):
 

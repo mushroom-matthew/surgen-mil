@@ -17,6 +17,8 @@ python scripts/appendix_tables.py --out outputs/appendix_tables.csv
 **Interpretation**: Simple mean-pool with weighted BCE is generally preferred. Unweighted BCE
 degrades on imbalanced datasets. Instance-level mean is similar to bag-level but with noisier gradients.
 
+> REVIEW: This interpretation conflicts with the appendix table in `docs/results_summary.md`, where the unweighted MeanPool row is slightly higher on both AUROC and AUPRC than the weighted baseline. "degrades" and "generally preferred" need justification or revision.
+
 ## Appendix B: Loss Function Ablation
 
 **Configs**: `configs/appendix/uni_attention_focal.yaml`
@@ -26,6 +28,8 @@ degrades on imbalanced datasets. Instance-level mean is similar to bag-level but
 
 **Interpretation**: Focal loss reduces variance in some seeds but does not systematically outperform
 weighted BCE. Weighted BCE is recommended as the default.
+
+> REVIEW: "recommended as the default" is prescriptive. The table supports "did not clearly outperform in this experiment" more directly than a general recommendation.
 
 ## Appendix C: Sparse Evidence Selection
 
@@ -45,6 +49,8 @@ python scripts/appendix_tables.py --out outputs/appendix_tables.csv
 calibrated, but is not robustly superior. Full-bag AttentionMIL with careful training is generally
 sufficient.
 
+> REVIEW: "when attention is poorly calibrated" and "generally sufficient" go beyond what the table alone establishes. Those claims should be marked as interpretation unless supported elsewhere.
+
 ## Appendix D: Train-Time Bag Sampling Protocol
 
 This repository distinguishes between:
@@ -59,6 +65,8 @@ The important implementation detail is that train-time sampling is **dynamic**, 
 - in practice, the model is exposed to different sampled views of the same slide across epochs
 
 This is the intended default. A fixed 512-patch subset per slide would behave more like lossy preprocessing than augmentation and could cause the model to overfit to an arbitrary view of each slide.
+
+> REVIEW: The implementation detail is correct, but this sentence is still hypothetical without direct experimental support in the repo.
 
 For sampler ablations, the intended clean comparison is:
 
