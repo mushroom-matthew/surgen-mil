@@ -1,8 +1,12 @@
 # Attention Visualization
 
-Attention-MIL models produce a per-patch scalar weight for each slide, making it possible to
-visualize *which tissue regions the model focuses on* when making a prediction. This document
-covers how to generate attention maps, what the outputs look like, and how to interpret them.
+Attention-MIL models produce a per-patch scalar weight for each slide. These weights can be
+projected back onto slide coordinates to visualize the model's attention or attribution scores —
+where high scores indicate patches that contributed strongly to the prediction. This document
+covers how to generate those maps, what the outputs look like, and how to interpret them.
+
+Note: high-scoring regions are not verified pathological regions of interest. The maps show
+model behaviour, not ground-truth morphology.
 
 ---
 
@@ -47,8 +51,9 @@ This mode:
 3. Selects the `n_examples` most *consistently* classified slides per category.
 4. Generates one figure per slide with one panel per model (latest seed only).
 
-Slide selection is cross-model: a TP slide ranked first is a true positive in *every* model
-and seed combination, not just the best run.
+Slide selection is cross-model: slides are ranked by how many model×seed combinations agree on
+the outcome, with mean probability as a tiebreaker. A slide ranked first has the highest
+agreement count across all available runs, not necessarily unanimous agreement.
 
 ### Single slide
 
@@ -145,16 +150,17 @@ fair-comparison models, comment out or remove the exploratory entries.
 ## Example outputs
 
 All examples are selected by the cross-model consistency method in `select_slides()`: slides are
-ranked by how consistently every model×seed combination agrees on the outcome, so the examples
-shown are the most robustly classified slides in the test set — not cherry-picked individual runs.
+ranked by how many model×seed combinations agree on the outcome. The examples shown have the
+highest agreement counts in each category — not cherry-picked from individual runs.
 
 Left to right in each figure: H&E thumbnail (where CZI is available), Attention MIL
 (experimental), MeanPool (fair) [integ-grad], Attn MIL (fair), Paper Repro (fair) [integ-grad].
 
 A note on MeanPool IG: even though the forward pass averages all patches equally, integrated
 gradients reveal which patches most strongly move the output when interpolated from zero. Where
-the MeanPool IG map broadly agrees with the attention maps, it is a good sign that the spatial
-signal is real rather than an artefact of the attention mechanism.
+MeanPool IG agrees spatially with learned attention maps, it is suggestive (though not proof)
+that the signal is not purely an artefact of the attention mechanism — patch-level ground truth
+would be required to validate this.
 
 ---
 
@@ -164,10 +170,10 @@ Slide `SR386_40X_HE_T402_01` (true MSI, all models predict MSI; prob ≥ 0.83).
 
 ![TP attention example](figures/attn_tp_SR386_T402.png)
 
-Attention is broadly distributed across the tissue in all models. MeanPool IG closely tracks
-the attention pattern of the learned models, reinforcing that the discriminative signal is
-spatially distributed rather than localised. Paper Repro IG is flatter but still directionally
-consistent.
+Attention is broadly distributed across the tissue in all models. MeanPool IG broadly tracks
+the learned attention patterns, and Paper Repro IG is flatter but directionally consistent.
+The broad agreement across methods is consistent with the discriminative signal being spatially
+distributed, though this cannot be confirmed without patch-level annotations.
 
 ---
 
@@ -177,11 +183,10 @@ Slide `SR1482_40X_HE_T061_02` (true MSS, all models predict MSI; prob ≥ 0.90).
 
 ![FP attention example](figures/attn_fp_SR1482_T061.png)
 
-All four models are confidently wrong and their attention maps are broadly similar — suggesting
-the tissue contains morphological features that systematically resemble MSI slides. This is a
-harder failure mode than seed noise: no model in the ensemble escapes it. The H&E thumbnail
-shows the tissue context; note the spatial correspondence between the attention-highlighted
-regions and the tissue boundary.
+All four models are confidently wrong and their attention maps are broadly similar. Unlike
+seed-noise failures where models disagree, no model in this set escapes the error — it is
+consistent across all runs. The H&E thumbnail shows the tissue context. The cause of the
+systematic misclassification is unknown without patch-level annotation.
 
 ---
 
@@ -194,11 +199,11 @@ Slide `SR386_40X_HE_T436_01` (true MSI; fair models near threshold, Paper Repro 
 Left to right: H&E thumbnail, Attention MIL (experimental, prob=0.75), MeanPool (fair)
 [integ-grad, prob=0.07], Attn MIL (fair, prob=0.76), Paper Repro (fair) [integ-grad, prob=0.06].
 
-The experimental Attention MIL and Attn MIL (fair) are both near the decision boundary, while
-MeanPool and Paper Repro are confidently wrong. The experimental model serves as a useful ceiling:
-the discriminative signal is present and partially recoverable, but not captured reliably under
-the controlled training regime. Paper Repro IG is nearly flat — the transformer is effectively
-abstaining on this slide.
+The experimental Attention MIL and Attn MIL (fair) are both near the decision boundary (prob
+≈ 0.75–0.76), while MeanPool and Paper Repro are far below threshold. The experimental model
+acts as a useful reference point: it recovers this slide where MeanPool and Paper Repro do not,
+suggesting some discriminative signal is accessible to attention-based aggregation even if not
+reliably captured under the fair-comparison regime. Paper Repro IG is nearly flat (prob=0.06).
 
 ---
 
@@ -208,10 +213,10 @@ Slide `SR386_40X_HE_T129_01` (true MSS, all models predict MSS; prob ≤ 0.09).
 
 ![TN attention example](figures/attn_tn_SR386_T129.png)
 
-All attention maps are dark and low-entropy — the models agree there is little evidence of MSI
-morphology anywhere in the tissue. MeanPool IG is nearly flat, consistent with a slide where no
-patch drives a strong positive signal. This is what "correct suppression" looks like: the spatial
-signal is absent, not just averaged out.
+All attention maps are dark and low-magnitude — the models agree on a low probability and no
+region drives a strong positive score. MeanPool IG is nearly flat. Low attribution does not
+imply the absence of MSI-related morphology; it means no patch strongly increased the model's
+positive prediction relative to the zero baseline.
 
 ---
 

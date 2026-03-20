@@ -12,6 +12,8 @@ Confusion matrices use seed-averaged predictions with Youden J threshold fit on 
 | TransformerMIL (unweighted BCE, Adam) | 0.806 ± 0.057 | 0.391 ± 0.116 |
 | *Paper baseline (Myles et al.)* | *0.827* | *—* |
 
+> REVIEW: The TransformerMIL label conflicts with the current fair config, which uses weighted BCE and AdamW. Confirm whether these metrics come from an older run setup. Also add a direct citation or explanatory note for the paper baseline value.
+
 ![Confusion matrices](figures/fair_comparison_confusion_matrices.png)
 
 ## Qualitative Interpretation
@@ -27,12 +29,16 @@ Confusion matrices use seed-averaged predictions with Youden J threshold fit on 
   labels, the Transformer overfits. It is included for comparison with prior work, not as a recommended
   approach.
 
+> REVIEW: This section repeatedly shifts from observation to causal explanation. "relevant morphological signal," "hard to train stably," and "overfits" are not directly established by the summary table alone. "not justified" and "recommended" are decision language that should either reference explicit criteria or be softened.
+
 ## Stable Conclusions
 
 1. Frozen UNI embeddings contain strong discriminative signal for MSI/MMR status.
 2. Simple pooling is a hard-to-beat baseline at this data scale.
 3. The main limitation is training instability under weak supervision — not absence of signal.
 4. Sparse evidence selection (top-k attention) shows conditional benefit but is not robustly superior.
+
+> REVIEW: These are framed as "Stable Conclusions" but several are still interpretive. #3 is especially strong because it rules out another explanation ("not absence of signal") that the present experiment does not conclusively eliminate.
 
 ## Appendix Results
 
@@ -59,6 +65,27 @@ Comparison against the MeanPool weighted-BCE baseline (`uni_mean_fair`).
 |-------|-------|-------|------|
 | AttentionMIL (weighted BCE) | 0.869 ± 0.020 | 0.381 ± 0.052 | full bag |
 | TopK-16 AttentionMIL (weighted BCE) | 0.853 ± 0.032 | 0.455 ± 0.139 | k=16 (≈3% of 512-patch training bag) |
+
+![Appendix C ROC and PR curves](figures/appendix_c_roc_pr_curves.png)
+
+**Reading the PR curve**: AUPRC is the area under the precision-recall curve — it measures how
+well the model ranks true positives above true negatives across *all* possible thresholds.
+TopK-16 (red) sits above AttentionMIL (blue) across most of the PR curve, meaning at
+intermediate recall levels it maintains higher precision for the same sensitivity. However, the
+Youden J threshold (diamond markers) selects the operating point that maximises
+sensitivity + specificity − 1 — which for AttentionMIL lands at high recall (0.92) with moderate
+precision (0.28), while TopK-16's Youden point is worse on both dimensions (rec=0.83, prec=0.19).
+
+A model can have higher AUPRC and a worse Youden operating point simultaneously: AUPRC rewards
+good ranking across the full curve, while Youden selects the single best threshold under that
+metric. The two are complementary, not redundant.
+
+![Appendix C confusion matrices](figures/appendix_c_confusion_matrices.png)
+
+The confusion matrices make the operating-point shift concrete: TopK-16's threshold drops from
+0.24 to 0.12, FPs increase from 28 to 42, and sensitivity drops from 11/12 to 10/12. Whether
+the AUPRC improvement is worth the worse Youden operating point depends on the clinical cost of
+false positives versus false negatives.
 
 ### Appendix D — Train-time sampler ablation
 
@@ -91,12 +118,21 @@ in evaluation-time evidence usage.
 | AttentionMIL + spatial balanced | TBD | TBD | grid-based coverage sampler |
 | AttentionMIL + feature diverse | TBD | TBD | feature-space coverage sampler |
 
+#### Confusion matrices (to be added)
+
+Once results are available, confusion matrices (seed-averaged, Youden J threshold) will be shown
+for each model family alongside the tables. For the sampler ablation in particular, scalar metrics
+alone may not capture shifts in the sensitivity/specificity operating point — a sampler that
+improves spatial coverage might improve sensitivity without changing AUROC, or reduce FPs at a
+cost to recall. The confusion matrix makes that tradeoff visible.
+
 #### Planned interpretation prompts
 
 - Does enforcing spatial coverage improve generalisation or only reduce variance?
 - Does feature-space diversity help more for MeanPool or for AttentionMIL?
 - Do gains, if any, persist under full-bag evaluation?
 - Is the main effect performance lift, seed-stability improvement, or both?
+- Does the confusion matrix show a sensitivity/specificity shift even when AUROC is unchanged?
 
 *All appendix metrics: mean ± std across seeds {42, 123, 456}, same split as main comparison.
 Regenerate with `python scripts/appendix_tables.py --out outputs/appendix_tables.csv`.*
