@@ -2,7 +2,16 @@
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
-outputs/
+# Ignore transient outputs but ship the final fair + appendix experiment results
+# Model weights (.pt) are excluded — download via scripts/download_weights.py
+outputs/*
+!outputs/uni_mean_fair
+!outputs/uni_attention_fair
+!outputs/paper_reproduction_fair
+!outputs/appendix
+!outputs/appendix_tables.csv
+# Exclude model weight files from all tracked outputs
+outputs/**/*.pt
 .vscode/
 .env
 .DS_Store

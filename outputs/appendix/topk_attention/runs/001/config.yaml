@@ -1,0 +1,28 @@
+data:
+  root: /mnt/data-surgen
+  split_seed: 0
+  max_patches: 512
+  train_frac: 0.7
+  val_frac: 0.15
+model:
+  name: topk_attention_mil
+  input_dim: 1024
+  attention_dim: 128
+  hidden_dim: 256
+  dropout: 0.1
+  k: 16
+optimizer:
+  lr: 0.0001
+  weight_decay: 0.0001
+loss:
+  name: bce
+  weighted: true
+training:
+  epochs: 30
+  seed: 42
+  min_epochs: 10
+  early_stopping_patience: 10
+  selection_metric: val_auprc
+  ema_alpha: 0.7
+output:
+  dir: outputs/appendix_topk_attention

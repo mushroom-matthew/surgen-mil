@@ -464,6 +464,7 @@ def main():
     print("Case-level metrics (test):", case_metrics)
 
     torch.save(model.state_dict(), out_dir / "model.pt")
+    torch.save(model.state_dict(), out_dir / "checkpoint.pt")
     with open(out_dir / "history.json", "w") as f:
         json.dump(history, f, indent=2)
     with open(out_dir / "metrics.json", "w") as f:
@@ -474,6 +475,34 @@ def main():
         }, f, indent=2)
     pd.DataFrame(all_preds).to_csv(out_dir / "predictions.csv", index=False)
     print(f"Predictions saved to {out_dir / 'predictions.csv'}")
+
+    # thresholds.json — Youden's J optimal threshold from validation set
+    from sklearn.metrics import roc_curve as _roc_curve
+    val_labels = [r["label"] for r in val_rows]
+    val_probs = [r["prob"] for r in val_rows]
+    if len(set(val_labels)) >= 2:
+        fpr, tpr, thresh = _roc_curve(val_labels, val_probs)
+        best_idx = int((tpr - fpr).argmax())
+        optimal_threshold = float(thresh[best_idx])
+    else:
+        optimal_threshold = 0.5
+    with open(out_dir / "thresholds.json", "w") as f:
+        json.dump({"optimal_youden": optimal_threshold, "default": 0.5}, f, indent=2)
+
+    # git_commit.txt
+    import subprocess
+    try:
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    except Exception:
+        commit = "unknown"
+    (out_dir / "git_commit.txt").write_text(commit + "\n")
+
+    # environment.txt
+    try:
+        env_txt = subprocess.check_output(["pip", "freeze"], text=True)
+    except Exception:
+        env_txt = "unknown\n"
+    (out_dir / "environment.txt").write_text(env_txt)
 
     plot_training_curve(history, out_dir / "training_curve.png")
     print(f"Training curve saved to {out_dir / 'training_curve.png'}")

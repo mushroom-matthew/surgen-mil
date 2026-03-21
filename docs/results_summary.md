@@ -106,33 +106,44 @@ in evaluation-time evidence usage.
 
 | Model | AUROC | AUPRC | Note |
 |-------|-------|-------|------|
-| MeanPool + random | TBD | TBD | baseline train-time sampler |
-| MeanPool + spatial balanced | TBD | TBD | grid-based coverage sampler |
-| MeanPool + feature diverse | TBD | TBD | feature-space coverage sampler |
+| MeanPool + random | 0.860 ± 0.005 | 0.447 ± 0.019 | baseline train-time sampler |
+| MeanPool + spatial balanced | 0.859 ± 0.007 | 0.447 ± 0.014 | grid-based coverage sampler |
+| MeanPool + feature diverse | 0.852 ± 0.005 | 0.358 ± 0.035 | feature-space coverage sampler |
 
 #### AttentionMIL
 
 | Model | AUROC | AUPRC | Note |
 |-------|-------|-------|------|
-| AttentionMIL + random | TBD | TBD | baseline train-time sampler |
-| AttentionMIL + spatial balanced | TBD | TBD | grid-based coverage sampler |
-| AttentionMIL + feature diverse | TBD | TBD | feature-space coverage sampler |
+| AttentionMIL + random | 0.869 ± 0.020 | 0.381 ± 0.052 | baseline train-time sampler |
+| AttentionMIL + spatial balanced | 0.861 ± 0.031 | 0.404 ± 0.058 | grid-based coverage sampler |
+| AttentionMIL + feature diverse | 0.879 ± 0.006 | 0.407 ± 0.058 | feature-space coverage sampler |
 
-#### Confusion matrices (to be added)
+#### Figures
 
-Once results are available, confusion matrices (seed-averaged, Youden J threshold) will be shown
-for each model family alongside the tables. For the sampler ablation in particular, scalar metrics
-alone may not capture shifts in the sensitivity/specificity operating point — a sampler that
-improves spatial coverage might improve sensitivity without changing AUROC, or reduce FPs at a
-cost to recall. The confusion matrix makes that tradeoff visible.
+![ROC and PR curves](figures/appendix_d_roc_pr_curves.png)
 
-#### Planned interpretation prompts
+![Confusion matrices](figures/appendix_d_confusion_matrices.png)
 
-- Does enforcing spatial coverage improve generalisation or only reduce variance?
-- Does feature-space diversity help more for MeanPool or for AttentionMIL?
-- Do gains, if any, persist under full-bag evaluation?
-- Is the main effect performance lift, seed-stability improvement, or both?
-- Does the confusion matrix show a sensitivity/specificity shift even when AUROC is unchanged?
+#### Interpretation
+
+**Sampler choice has minimal effect on MeanPool.** Random and spatial samplers match closely
+(AUROC 0.860/0.859, AUPRC 0.447/0.447). Feature-diverse sampling hurts AUPRC notably
+(0.358 ± 0.035), possibly because forcing representational spread selects atypical patches that
+are less discriminative for the weighted mean.
+
+**AttentionMIL shows high seed variance that obscures sampler signal.** AUPRC std is 0.052–0.058
+across seeds for all three samplers, making mean differences (0.381 vs 0.404 vs 0.407)
+unreliable. Feature-diverse sampling achieves the lowest AUROC variance (± 0.006), suggesting
+more stable training dynamics when patch selection is deterministic in feature space.
+
+**Confusion matrices reveal stable operating points for MeanPool, variable for AttentionMIL.**
+MeanPool thresholds (0.20–0.38) and TP/FP counts are consistent across samplers. AttentionMIL
+spatial sampling has a noticeably lower threshold (0.15) with more FPs, while random and
+feature-diverse are closer to the full-bag baseline (threshold ≈ 0.24).
+
+**Summary:** Sampler choice does not meaningfully improve over random for either model family at
+this scale. The main finding is negative: richer sampling strategies do not compensate for the
+inherent instability of attention-based MIL under small training sets.
 
 *All appendix metrics: mean ± std across seeds {42, 123, 456}, same split as main comparison.
 Regenerate with `python scripts/appendix_tables.py --out outputs/appendix_tables.csv`.*

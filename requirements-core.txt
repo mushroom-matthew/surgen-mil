@@ -7,3 +7,4 @@ matplotlib
 PyYAML
 zarr>=2.12
 tqdm
+huggingface_hub
