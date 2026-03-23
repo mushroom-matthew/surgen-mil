@@ -110,6 +110,7 @@ def evaluate(model, loader, device, split: str = "", temperature: float = 1.0):
 
         rows.append({
             "slide_id": batch["slide_id"],
+            "cohort": batch.get("cohort", ""),
             "label": int(y.item()),
             "prob": prob,
             "split": split,
@@ -285,10 +286,53 @@ def plot_training_curve(history: list[dict], out_path: Path) -> None:
     plt.close(fig)
 
 
+def _apply_overrides(cfg: dict, overrides: list[str]) -> None:
+    """Apply dotted key=value overrides to cfg in place, e.g. data.split_seed=1."""
+    for kv in overrides:
+        key, _, raw = kv.partition("=")
+        parts = key.strip().split(".")
+        d = cfg
+        for part in parts[:-1]:
+            d = d.setdefault(part, {})
+        # coerce type: int > float > bool > str
+        try:
+            val = int(raw)
+        except ValueError:
+            try:
+                val = float(raw)
+            except ValueError:
+                val = {"true": True, "false": False}.get(raw.lower(), raw)
+        d[parts[-1]] = val
+
+
+def _threshold_metrics(y_true: list[int], y_probs: list[float], threshold: float) -> dict:
+    tp = tn = fp = fn = 0
+    for t, p in zip(y_true, y_probs):
+        pred = 1 if p >= threshold else 0
+        if t == 1 and pred == 1: tp += 1
+        elif t == 0 and pred == 0: tn += 1
+        elif t == 0 and pred == 1: fp += 1
+        else: fn += 1
+    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else None
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else None
+    ppv = tp / (tp + fp) if (tp + fp) > 0 else None
+    npv = tn / (tn + fn) if (tn + fn) > 0 else None
+    return {
+        "threshold": threshold,
+        "tp": tp, "tn": tn, "fp": fp, "fn": fn,
+        "sensitivity": sensitivity,
+        "specificity": specificity,
+        "ppv": ppv,
+        "npv": npv,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--seed", type=int, default=None, help="Override training.seed in config")
+    parser.add_argument("--override", nargs="*", default=[],
+                        help="Config overrides as dotted key=value pairs, e.g. data.split_seed=1")
     args = parser.parse_args()
 
     with open(args.config, "r") as f:
@@ -296,6 +340,8 @@ def main():
 
     if args.seed is not None:
         cfg["training"]["seed"] = args.seed
+
+    _apply_overrides(cfg, args.override or [])
 
     set_seed(cfg["training"]["seed"])
 
@@ -390,6 +436,8 @@ def main():
                     out = model(x, coords=coords)
                     logit = out["logit"].view(())
                     loss = criterion(logit.unsqueeze(0), y.unsqueeze(0))
+                    if "aux_loss" in out:
+                        loss = loss + out["aux_loss"]
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
@@ -397,6 +445,8 @@ def main():
                 out = model(x, coords=coords)
                 logit = out["logit"].view(())
                 loss = criterion(logit.unsqueeze(0), y.unsqueeze(0))
+                if "aux_loss" in out:
+                    loss = loss + out["aux_loss"]
                 loss.backward()
                 optimizer.step()
 
@@ -425,6 +475,8 @@ def main():
             "val_auprc_ema": ema_val_metric,
             **attn_diag,
         }
+        if "attention_diversity_penalty" in out:
+            record["attention_diversity_penalty"] = float(out["attention_diversity_penalty"].item())
         history.append(record)
         print(record)
 
@@ -467,14 +519,6 @@ def main():
     torch.save(model.state_dict(), out_dir / "checkpoint.pt")
     with open(out_dir / "history.json", "w") as f:
         json.dump(history, f, indent=2)
-    with open(out_dir / "metrics.json", "w") as f:
-        json.dump({
-            "test": test_metrics,
-            "test_case_level": case_metrics,
-            "temperature": temperature,
-        }, f, indent=2)
-    pd.DataFrame(all_preds).to_csv(out_dir / "predictions.csv", index=False)
-    print(f"Predictions saved to {out_dir / 'predictions.csv'}")
 
     # thresholds.json — Youden's J optimal threshold from validation set
     from sklearn.metrics import roc_curve as _roc_curve
@@ -488,6 +532,25 @@ def main():
         optimal_threshold = 0.5
     with open(out_dir / "thresholds.json", "w") as f:
         json.dump({"optimal_youden": optimal_threshold, "default": 0.5}, f, indent=2)
+
+    # Threshold-specific metrics on test set at 0.5 and Youden J
+    test_labels = [r["label"] for r in test_rows]
+    test_probs  = [r["prob"]  for r in test_rows]
+    threshold_metrics = {
+        "default_0.5": _threshold_metrics(test_labels, test_probs, 0.5),
+        "youden_j":    _threshold_metrics(test_labels, test_probs, optimal_threshold),
+    }
+    print("Threshold metrics (test):", threshold_metrics)
+
+    with open(out_dir / "metrics.json", "w") as f:
+        json.dump({
+            "test": test_metrics,
+            "test_case_level": case_metrics,
+            "test_threshold_metrics": threshold_metrics,
+            "temperature": temperature,
+        }, f, indent=2)
+    pd.DataFrame(all_preds).to_csv(out_dir / "predictions.csv", index=False)
+    print(f"Predictions saved to {out_dir / 'predictions.csv'}")
 
     # git_commit.txt
     import subprocess

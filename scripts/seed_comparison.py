@@ -28,6 +28,8 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
+from compare_models import adaptive_unit_ylim
+
 # ---------------------------------------------------------------------------
 # Models to compare
 # ---------------------------------------------------------------------------
@@ -196,6 +198,7 @@ def plot_training_curves(model_runs: dict[str, list[dict]], out_path: Path) -> N
         ax_auroc = axes[row_idx, 0]
         ax_auprc = axes[row_idx, 1]
         ax_loss  = axes[row_idx, 2]
+        auroc_vals, auprc_vals = [], []
 
         for run_idx, run in enumerate(runs):
             hist = run.get("history")
@@ -205,6 +208,8 @@ def plot_training_curves(model_runs: dict[str, list[dict]], out_path: Path) -> N
             val_auroc  = [h.get("val_auroc") for h in hist]
             val_auprc  = [h.get("val_auprc") for h in hist]
             train_loss = [h.get("train_loss") for h in hist]
+            auroc_vals.extend([v for v in val_auroc if v is not None])
+            auprc_vals.extend([v for v in val_auprc if v is not None])
             label = f"seed {run['seed']} (run {run['run']})"
             color = PALETTE[run_idx % len(PALETTE)]
 
@@ -215,14 +220,14 @@ def plot_training_curves(model_runs: dict[str, list[dict]], out_path: Path) -> N
         ax_auroc.set_title(f"{model_name} — Val AUROC")
         ax_auroc.set_xlabel("Epoch")
         ax_auroc.set_ylabel("AUROC")
-        ax_auroc.set_ylim(0, 1)
+        ax_auroc.set_ylim(*adaptive_unit_ylim(auroc_vals))
         ax_auroc.legend(fontsize=8)
         ax_auroc.grid(True, alpha=0.3)
 
         ax_auprc.set_title(f"{model_name} — Val AUPRC")
         ax_auprc.set_xlabel("Epoch")
         ax_auprc.set_ylabel("AUPRC")
-        ax_auprc.set_ylim(0, 1)
+        ax_auprc.set_ylim(*adaptive_unit_ylim(auprc_vals))
         ax_auprc.legend(fontsize=8)
         ax_auprc.grid(True, alpha=0.3)
 
@@ -290,7 +295,7 @@ def plot_metric_summary(
         ax.set_xticklabels(model_names, rotation=20, ha="right", fontsize=8)
         ax.set_ylabel(metric_label)
         ax.set_title(metric_label)
-        ax.set_ylim(0, 1)
+        ax.set_ylim(*adaptive_unit_ylim([v for vals in all_vals for v in vals]))
         ax.grid(True, axis="y", alpha=0.3)
 
     fig.tight_layout()
@@ -419,6 +424,8 @@ def plot_roc_pr(
     import matplotlib.pyplot as plt
 
     fig, (ax_roc, ax_pr) = plt.subplots(1, 2, figsize=(12, 5))
+    roc_tpr_vals: list[float] = []
+    pr_precision_vals: list[float] = []
 
     for (model_name, runs), color in zip(model_runs.items(), PALETTE):
         avg_test, seed_note = _average_preds(runs, "test_preds")
@@ -430,11 +437,15 @@ def plot_roc_pr(
         auprc = average_precision_score(y_true, y_score)
         label_roc = f"{model_name} ({seed_note})  AUROC={auroc:.3f}"
         label_pr  = f"{model_name} ({seed_note})  AUPRC={auprc:.3f}"
-        RocCurveDisplay.from_predictions(y_true, y_score, name=label_roc, ax=ax_roc, color=color)
-        PrecisionRecallDisplay.from_predictions(y_true, y_score, name=label_pr, ax=ax_pr, color=color)
+        roc_disp = RocCurveDisplay.from_predictions(y_true, y_score, name=label_roc, ax=ax_roc, color=color)
+        pr_disp = PrecisionRecallDisplay.from_predictions(y_true, y_score, name=label_pr, ax=ax_pr, color=color)
+        roc_tpr_vals.extend(roc_disp.line_.get_ydata().tolist())
+        pr_precision_vals.extend(pr_disp.line_.get_ydata().tolist())
 
     ax_roc.plot([0, 1], [0, 1], "k--", lw=0.8, label="Chance")
     ax_roc.set_title("ROC Curve (test)", fontsize=12)
+    ax_roc.set_xlim(0, 1)
+    ax_roc.set_ylim(*adaptive_unit_ylim(roc_tpr_vals))
     ax_roc.legend(fontsize=8)
     ax_roc.grid(True, alpha=0.3)
 
@@ -447,6 +458,8 @@ def plot_roc_pr(
                           label=f"Chance ({prevalence:.2f})")
             break
     ax_pr.set_title("Precision-Recall Curve (test)", fontsize=12)
+    ax_pr.set_xlim(0, 1)
+    ax_pr.set_ylim(*adaptive_unit_ylim(pr_precision_vals))
     ax_pr.legend(fontsize=8)
     ax_pr.grid(True, alpha=0.3)
 
@@ -512,6 +525,7 @@ def plot_calibration(
 
     fig, ax = plt.subplots(figsize=(6, 5))
     ax.plot([0, 1], [0, 1], "k--", lw=0.8, label="Perfect calibration")
+    frac_pos_vals: list[float] = []
 
     for (model_name, runs), color in zip(model_runs.items(), PALETTE):
         avg_test, seed_note = _average_preds(runs, "test_preds")
@@ -520,12 +534,15 @@ def plot_calibration(
         frac_pos, mean_pred = calibration_curve(
             avg_test["label"], avg_test["prob"], n_bins=n_bins, strategy="uniform"
         )
+        frac_pos_vals.extend(frac_pos.tolist())
         ax.plot(mean_pred, frac_pos, marker="o", color=color, linewidth=1.5, markersize=5,
                 label=f"{model_name} ({seed_note})")
 
     ax.set_xlabel("Mean predicted probability")
     ax.set_ylabel("Fraction of positives")
     ax.set_title("Calibration (test)", fontsize=12)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(*adaptive_unit_ylim(frac_pos_vals))
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 

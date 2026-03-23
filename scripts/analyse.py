@@ -25,6 +25,8 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
+from compare_models import adaptive_unit_ylim
+
 # ---------------------------------------------------------------------------
 # Config: which runs to include
 # ---------------------------------------------------------------------------
@@ -393,6 +395,7 @@ def plot_cohort_breakdown(
     offsets = np.arange(n_runs) * width - (n_runs - 1) * width / 2
 
     for ax, metric in zip(axes, metric_names):
+        metric_vals = []
         for i, (run_name, color) in enumerate(zip(run_preds, COLORS)):
             vals = []
             for cohort in cohorts:
@@ -402,6 +405,7 @@ def plot_cohort_breakdown(
                     (result["metric"] == metric)
                 ]
                 vals.append(row["value"].values[0] if not row.empty else 0.0)
+            metric_vals.extend(vals)
             bars = ax.bar(x + offsets[i], vals, width, label=run_name, color=color, alpha=0.85)
             for bar, val in zip(bars, vals):
                 ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
@@ -409,7 +413,7 @@ def plot_cohort_breakdown(
 
         ax.set_xticks(x)
         ax.set_xticklabels(cohorts)
-        ax.set_ylim(0, 1.1)
+        ax.set_ylim(*adaptive_unit_ylim(metric_vals))
         ax.set_ylabel(metric)
         ax.set_title(f"{metric} by cohort ({split})", fontsize=12)
         ax.legend(fontsize=7)

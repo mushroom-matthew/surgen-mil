@@ -3,6 +3,8 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from src.models.aggregators.coord_encoder import CoordinateEncoder
+
 
 class AttentionMIL(nn.Module):
     def __init__(
@@ -11,11 +13,24 @@ class AttentionMIL(nn.Module):
         attention_dim: int = 128,
         hidden_dim: int = 256,
         dropout: float = 0.1,
+        use_coords: bool = False,
+        coord_hidden_dim: int = 32,
+        coord_embed_dim: int = 32,
     ):
         super().__init__()
 
+        self.use_coords = use_coords
+        attn_input_dim = input_dim
+        self.coord_encoder = None
+        if self.use_coords:
+            self.coord_encoder = CoordinateEncoder(
+                hidden_dim=coord_hidden_dim,
+                output_dim=coord_embed_dim,
+            )
+            attn_input_dim += coord_embed_dim
+
         self.attention = nn.Sequential(
-            nn.Linear(input_dim, attention_dim),
+            nn.Linear(attn_input_dim, attention_dim),
             nn.Tanh(),
             nn.Linear(attention_dim, 1),
         )
@@ -31,7 +46,12 @@ class AttentionMIL(nn.Module):
         """
         x: [N, D]
         """
-        attn_scores = self.attention(x)                    # [N, 1]
+        attn_input = x
+        if self.use_coords:
+            coord_embed = self.coord_encoder(coords)
+            attn_input = torch.cat([x, coord_embed], dim=-1)
+
+        attn_scores = self.attention(attn_input)             # [N, 1]
         attn_weights = torch.softmax(attn_scores, dim=0)   # [N, 1]
 
         slide_embedding = torch.sum(attn_weights * x, dim=0)  # [D]

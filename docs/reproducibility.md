@@ -55,11 +55,9 @@ python train.py --config configs/uni_mean_fair.yaml --seed 42
 - When `data.max_patches` is set, training uses a train-time bag sampler and validation/test use full bags.
 - The sampled training bag is **not** fixed once per run.
 - Sampling happens inside dataset `__getitem__`, so each time a slide is fetched during training a fresh subset can be drawn.
-- In practice this means the bag is re-sampled across epochs and acts like within-slide stochastic augmentation.
-- This is intentional: fixing one truncated bag per slide would turn bag construction into a one-time lossy preprocessing step and can overfit to an accidental subset of patches.
+- In practice, the model is exposed to different sampled views of the same slide across epochs.
+- This is the intended default: with `max_patches` set, each epoch presents the model with a different random subset of patches from each slide.
 - If `data.max_patches: null`, full bags are used in both training and evaluation.
-
-> REVIEW: The first three bullets are implementation facts. "acts like within-slide stochastic augmentation," "lossy preprocessing," and "can overfit" are plausible interpretations but not directly demonstrated in this repository unless backed by an explicit ablation.
 
 For the Phase 1 sampler ablation, the intended comparison is therefore:
 - same split
@@ -103,6 +101,6 @@ Two threshold conventions are used:
 2. **Youden J threshold**: Optimised on the validation set to maximise `sensitivity + specificity - 1`.
    Computed in `scripts/appendix_tables.py` (`_youden_threshold` function).
 
-For deployment, we recommend the Youden J threshold fit on validation data.
-
-> REVIEW: "For deployment, we recommend..." is too strong without an evaluation tailored to deployment conditions. This repository does not provide external validation or a deployment study.
+The Youden J threshold is fit on the held-out validation set. This repository does not include
+external validation or a deployment study; threshold selection for any clinical or operational
+use should be evaluated in the target setting.

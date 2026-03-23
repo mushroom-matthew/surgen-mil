@@ -26,6 +26,8 @@ from sklearn.metrics import (
     precision_recall_curve,
 )
 
+from compare_models import adaptive_unit_ylim
+
 # ---------------------------------------------------------------------------
 # Model registry
 # ---------------------------------------------------------------------------
@@ -134,6 +136,8 @@ def _plot_family(axes: tuple, family_name: str, model_dict: dict, base_dir: Path
 
     ax_roc, ax_pr = axes
     prevalence = None
+    roc_tpr_vals: list[float] = []
+    pr_precision_vals: list[float] = []
 
     for model_name, rel_dir in model_dict.items():
         runs     = _load_runs(base_dir / rel_dir)
@@ -167,11 +171,13 @@ def _plot_family(axes: tuple, family_name: str, model_dict: dict, base_dir: Path
         short_name = model_name.split(" + ", 1)[-1].capitalize()
 
         fpr_c, tpr_c, _ = roc_curve(y_true, y_score)
+        roc_tpr_vals.extend(tpr_c.tolist())
         ax_roc.plot(fpr_c, tpr_c, color=color, linewidth=lw,
                     label=f"{short_name}  (AUROC={auroc:.3f})")
         ax_roc.plot(fpr_op, tpr_op, marker="D", color=color, markersize=7, zorder=5)
 
         precision, recall, _ = precision_recall_curve(y_true, y_score)
+        pr_precision_vals.extend(precision.tolist())
         ax_pr.plot(recall, precision, color=color, linewidth=lw,
                    label=f"{short_name}  (AUPRC={auprc:.3f})")
         ax_pr.plot(rec_op, prec_op, marker="D", color=color, markersize=7, zorder=5)
@@ -185,7 +191,7 @@ def _plot_family(axes: tuple, family_name: str, model_dict: dict, base_dir: Path
     ax_roc.set_ylabel("True Positive Rate (Sensitivity)", fontsize=9)
     ax_roc.grid(True, alpha=0.3)
     ax_roc.set_xlim(-0.02, 1.02)
-    ax_roc.set_ylim(-0.02, 1.02)
+    ax_roc.set_ylim(*adaptive_unit_ylim(roc_tpr_vals))
     ax_roc.set_title(f"{family_name} — ROC curve", fontsize=10)
 
     if prevalence is not None:
@@ -195,7 +201,7 @@ def _plot_family(axes: tuple, family_name: str, model_dict: dict, base_dir: Path
     ax_pr.set_ylabel("Precision (PPV)", fontsize=9)
     ax_pr.grid(True, alpha=0.3)
     ax_pr.set_xlim(-0.02, 1.02)
-    ax_pr.set_ylim(-0.02, 1.02)
+    ax_pr.set_ylim(*adaptive_unit_ylim(pr_precision_vals))
     ax_pr.set_title(f"{family_name} — Precision-Recall curve", fontsize=10)
 
     youden_handle = Line2D([0], [0], color="gray", linestyle="none", marker="D",

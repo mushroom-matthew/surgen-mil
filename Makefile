@@ -1,4 +1,4 @@
-.PHONY: smoke test train-mean train-attention train-transformer fair-comparison appendix appendix-tables compare evaluate attn-auto attn-seed-grid attn-slide attn-stats errors error-report help
+.PHONY: smoke test train-mean train-attention train-transformer fair-comparison multisplit-updates multisplit-analyse appendix appendix-tables compare evaluate attn-auto attn-seed-grid attn-slide attn-stats errors error-report help
 
 smoke:  ## Run smoke test with synthetic data
 	python scripts/smoke_test.py
@@ -17,6 +17,12 @@ train-transformer:  ## Train TransformerMIL model (fair comparison config)
 
 fair-comparison:  ## Train all three models with 3 seeds each (parallel)
 	bash scripts/run_fair_comparison.sh
+
+multisplit-updates:  ## Train mainline updated suite across split seeds 0/1/2
+	bash scripts/run_main_multisplit_updates.sh
+
+multisplit-analyse:  ## Analyse outputs/multisplit with overall + per-split reports
+	python scripts/compare_multisplit.py
 
 appendix:  ## Train all appendix models with 3 seeds each
 	bash scripts/run_appendix.sh

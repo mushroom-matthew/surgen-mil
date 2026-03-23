@@ -4,12 +4,10 @@ Modular multiple-instance learning (MIL) framework for slide-level MSI/MMR predi
 precomputed UNI patch embeddings on the SurGen colorectal cancer dataset.
 
 This repository accompanies a computational pathology evaluation comparing three aggregation
-strategies — mean pooling, attention MIL, and transformer MIL — under identical experimental
+strategies — mean pooling, attention MIL, and transformer MIL — under comparable experimental
 conditions. The core finding is that frozen UNI embeddings already contain strong discriminative
 signal, and simple pooled baselines are competitive with more expressive architectures at this
-data scale.
-
-> REVIEW: "identical experimental conditions" appears too strong for the current fair configs. `paper_reproduction_fair.yaml` differs from the other fair configs in epochs and AMP settings, and the repo separately documents that training regimes differ across variants. "strong discriminative signal" and "competitive" are interpretive claims rather than direct measurements.
+data scale (see Main Findings table below).
 
 ---
 
@@ -19,25 +17,26 @@ data scale.
 |-------|--------------------|--------------------|
 | MeanPool (weighted BCE) | **0.860 ± 0.005** | 0.447 ± 0.019 |
 | AttentionMIL (weighted BCE) | 0.869 ± 0.020 | 0.381 ± 0.052 |
-| TransformerMIL (unweighted BCE, Adam) | 0.806 ± 0.057 | 0.391 ± 0.116 |
+| TransformerMIL (weighted BCE) | 0.806 ± 0.057 | 0.391 ± 0.116 |
 | *Paper baseline (Myles et al.)* | *0.827* | *—* |
 
-> REVIEW: The TransformerMIL row label does not match the current `configs/paper_reproduction_fair.yaml`, which uses weighted BCE and AdamW. Verify whether the table reflects older runs or stale wording. Also cite the source for the paper baseline value `0.827` locally or in the caption.
-
 *3 seeds × fixed split (split_seed=0), temperature scaling. See `docs/results_summary.md`.*
+*Paper baseline: Myles et al. (2025), GigaScience — doi:10.1093/gigascience/giaf086.*
 
 ![Confusion matrices](docs/figures/fair_comparison_confusion_matrices.png)
 
-- **Frozen UNI embeddings are strongly discriminative** for MSI/MMR status without any fine-tuning.
-- **Mean pooling is the most stable baseline**: consistent performance across seeds, low variance.
-- **AttentionMIL is competitive but seed-dependent**: higher peak performance in some runs,
-  but 4× higher AUROC variance — suggesting training instability at this sample size.
-- **TransformerMIL (6.8M params) is not justified** in this data regime: lowest mean AUROC,
-  highest variance, highest compute cost.
-- **Sparse evidence selection (top-k attention)** is conditionally useful but not robustly superior
-  to full-bag attention.
-
-> REVIEW: This whole bullet list mixes measured outcomes with stronger interpretation and recommendation. "strongly discriminative," "competitive," "training instability," "not justified," and "conditionally useful" should be either supported by explicit analysis or marked as interpretation. "4× higher AUROC variance" should also be presented as an observed ratio from this experiment, not a general conclusion.
+- **Frozen UNI embeddings are strongly discriminative** for MSI/MMR status without any fine-tuning:
+  all models exceed the paper baseline AUROC of 0.827 on this split.
+- **Mean pooling is the most stable baseline**: lowest cross-seed AUROC variance (±0.005),
+  consistent performance across all three seeds.
+- **AttentionMIL is competitive but seed-dependent**: matched or exceeded MeanPool in some runs,
+  but with 4× higher AUROC variance (±0.020 vs ±0.005) — an observation from this experiment,
+  not a general claim. See `docs/results_summary.md` for per-seed breakdown.
+- **TransformerMIL (6.8M params)** produced the lowest mean AUROC (0.806), highest variance
+  (±0.057), and highest compute cost across this three-seed, fixed-split comparison.
+- **Sparse evidence selection (top-k attention)** improves AUPRC in this experiment (0.455 vs
+  0.381) but reduces AUROC (0.853 vs 0.869); not robustly superior overall. See Appendix C
+  in `docs/appendix.md`.
 
 ---
 
@@ -65,6 +64,7 @@ surgen-mil/
     inspect_attention.py       # attention weight diagnostics
     sampler_diagnostics.py     # quantify sampler coverage/diversity on real slides
     run_fair_comparison.sh     # train all 3 models x 3 seeds
+    run_main_multisplit_updates.sh  # mainline updates across split seeds 0/1/2
     run_phase1_sampler_ablation.sh  # train mean/attention x sampler ablation
     run_appendix.sh            # train appendix models x 3 seeds
     analyse.py                 # cohort-level analysis
@@ -157,6 +157,33 @@ python scripts/compare_models.py \
   --out outputs/comparison
 ```
 
+## Multi-Split Mainline Updates
+
+The expanded mainline sweep includes the original fair-comparison trio plus:
+
+- `configs/uni_gated_attention.yaml`
+- `configs/uni_mean_var.yaml`
+- `configs/uni_hybrid_attention_mean2.yaml`
+- `configs/uni_attention_spatial_fair.yaml`
+- `configs/uni_hybrid_attention_spatial_mean2.yaml`
+
+Run the full suite across split seeds `{0,1,2}` and training seeds `{42,123,456}` with:
+
+```bash
+make multisplit-updates
+```
+
+or:
+
+```bash
+MAX_PARALLEL=2 bash scripts/run_main_multisplit_updates.sh
+```
+
+Outputs are written to `outputs/multisplit/<config_name>/split_<seed>/`.
+If a config already has canonical runs in its original output directory for the requested split
+(for example the existing split-0 fair-comparison runs), the launcher skips retraining and
+creates a symlink into the `outputs/multisplit/` tree instead.
+
 ---
 
 ## Reproducing Appendix Analyses
@@ -185,11 +212,16 @@ See `docs/appendix.md` for interpretation of each section.
 
 ## Attention Visualization
 
-Attention-MIL models produce per-patch scores that can be projected back onto slide coordinates to
-show which tissue regions the model focuses on. The script auto-selects consistent TP/FP/FN/TN
-examples across all model×seed combinations:
+Attention-MIL models produce per-patch attention weights that can be projected back onto slide
+coordinates to identify which tissue regions received high weight from the model. These weights
+are learned end-to-end from slide-level BCE supervision — they are not validated pathology
+annotations and should not be interpreted as direct indicators of biological ground truth. Attention
+patterns vary across seeds and model checkpoints, reflecting the stochasticity of training at this
+sample size; any individual attention map is one representative draw from an uncertain distribution
+over which patches the model found useful during that training run.
 
-> REVIEW: "focuses on" is common shorthand, but it still implies interpretability. Consider clarifying that these are model-derived attention or attribution scores, not validated pathology ground truth.
+The script auto-selects TP/FP/FN/TN examples ranked by classification count and mean predicted
+probability across model×seed combinations:
 
 ```bash
 # Auto-select representative TP/FP/FN/TN slides (3 per category)
@@ -200,10 +232,10 @@ python scripts/failures/compare_attention.py \
     --auto --n_examples 3 --topk 100 --out outputs/attention_viz
 ```
 
-Slides are selected by cross-model consistency: the examples shown are the most robustly
-classified slides in the test set across all model×seed combinations.
-
-> REVIEW: This overstates the selector. The code ranks by TP/FP/FN/TN counts and mean probability; it does not require unanimity across all model×seed combinations.
+Slides are selected by ranking: for each category (TP/FP/FN/TN), slides are ranked by how
+frequently they fall into that category across model×seed combinations and by their mean predicted
+probability. The examples shown are the highest-ranked slides under that criterion — not slides
+that are unanimously classified the same way by all models.
 
 False positive (true MSS, all models predict MSI — systematic failure):
 

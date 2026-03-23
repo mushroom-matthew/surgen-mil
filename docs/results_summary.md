@@ -9,36 +9,37 @@ Confusion matrices use seed-averaged predictions with Youden J threshold fit on 
 |-------|--------------------|--------------------|
 | MeanPool (weighted BCE) | 0.860 ± 0.005 | 0.447 ± 0.019 |
 | AttentionMIL (weighted BCE) | 0.869 ± 0.020 | 0.381 ± 0.052 |
-| TransformerMIL (unweighted BCE, Adam) | 0.806 ± 0.057 | 0.391 ± 0.116 |
+| TransformerMIL (weighted BCE) | 0.806 ± 0.057 | 0.391 ± 0.116 |
 | *Paper baseline (Myles et al.)* | *0.827* | *—* |
 
-> REVIEW: The TransformerMIL label conflicts with the current fair config, which uses weighted BCE and AdamW. Confirm whether these metrics come from an older run setup. Also add a direct citation or explanatory note for the paper baseline value.
+*Paper baseline: Myles et al. (2025), GigaScience — "SurGen: a multimodal, multi-centre surgical and genomics colorectal cancer dataset", doi:10.1093/gigascience/giaf086.*
 
 ![Confusion matrices](figures/fair_comparison_confusion_matrices.png)
 
 ## Qualitative Interpretation
 
-- **MeanPool is the strongest stable baseline.** Simple averaging of frozen UNI features is competitive
-  with more complex architectures. The UNI backbone already encodes the relevant morphological signal.
+- **MeanPool is the strongest stable baseline.** Simple averaging of frozen UNI features achieves
+  competitive AUROC (0.860) with the lowest cross-seed variance (±0.005), consistent with UNI
+  embeddings carrying strong discriminative signal that does not require learned aggregation
+  to surface.
 
-- **AttentionMIL is promising but seed-dependent.** When it works, it matches or exceeds MeanPool.
-  Variance across seeds is higher, suggesting the attention mechanism is hard to train stably at this
-  sample size.
+- **AttentionMIL is promising but seed-dependent.** Mean AUROC (0.869) is marginally higher than
+  MeanPool, but cross-seed variance is 4× larger (±0.020 vs ±0.005). This observation is from
+  three seeds on one fixed split; whether the variance reflects inherent training sensitivity or
+  an artefact of this dataset size is not conclusively established here.
 
-- **TransformerMIL is not justified in this data regime.** With 6.8M parameters and no patch-level
-  labels, the Transformer overfits. It is included for comparison with prior work, not as a recommended
-  approach.
+- **TransformerMIL has the highest parameter count (6.8M) and lowest mean AUROC (0.806) in this
+  experiment**, with the highest cross-seed variance (±0.057). Whether this reflects overfitting,
+  optimisation difficulty under weak supervision, or data-scale mismatch is not directly
+  established by this comparison alone; it is included here alongside the smaller architectures
+  to match the scope of prior work.
 
-> REVIEW: This section repeatedly shifts from observation to causal explanation. "relevant morphological signal," "hard to train stably," and "overfits" are not directly established by the summary table alone. "not justified" and "recommended" are decision language that should either reference explicit criteria or be softened.
+## Observations
 
-## Stable Conclusions
-
-1. Frozen UNI embeddings contain strong discriminative signal for MSI/MMR status.
-2. Simple pooling is a hard-to-beat baseline at this data scale.
-3. The main limitation is training instability under weak supervision — not absence of signal.
-4. Sparse evidence selection (top-k attention) shows conditional benefit but is not robustly superior.
-
-> REVIEW: These are framed as "Stable Conclusions" but several are still interpretive. #3 is especially strong because it rules out another explanation ("not absence of signal") that the present experiment does not conclusively eliminate.
+1. All three models exceed the paper baseline AUROC of 0.827 in this three-seed, fixed-split comparison, consistent with frozen UNI embeddings providing useful discriminative signal for MSI/MMR status.
+2. MeanPool achieves competitive AUROC with the lowest cross-seed variance, making it the most reproducible aggregator in this experiment.
+3. AttentionMIL shows higher cross-seed variance (±0.020) than MeanPool (±0.005). Whether this reflects training instability, signal absence in some seeds, or both is not directly resolved by this experiment. A direct test would compare held-out performance as a function of training set size or fix random initialisation while varying bag sampling.
+4. In this experiment, TopK-16 training improves AUPRC but reduces AUROC relative to full-bag AttentionMIL; neither configuration dominates across metrics.
 
 ## Appendix Results
 

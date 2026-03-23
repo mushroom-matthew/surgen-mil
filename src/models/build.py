@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from src.models.aggregators.attention_mil import AttentionMIL
 from src.models.aggregators.gated_attention_mil import GatedAttentionMIL
+from src.models.aggregators.hybrid_attention_mil import HybridAttentionMIL
 from src.models.aggregators.instance_mean import InstanceMeanMIL
 from src.models.aggregators.lse_pool import LSEPoolMIL
 from src.models.aggregators.mean_pool import MeanPoolMIL
@@ -26,6 +27,9 @@ def build_model(cfg):
             attention_dim=cfg["model"]["attention_dim"],
             hidden_dim=cfg["model"]["hidden_dim"],
             dropout=cfg["model"]["dropout"],
+            use_coords=cfg["model"].get("use_coords", False),
+            coord_hidden_dim=cfg["model"].get("coord_hidden_dim", 32),
+            coord_embed_dim=cfg["model"].get("coord_embed_dim", 32),
         )
     elif model_name == "gated_attention_mil":
         return GatedAttentionMIL(
@@ -33,6 +37,20 @@ def build_model(cfg):
             attention_dim=cfg["model"]["attention_dim"],
             hidden_dim=cfg["model"]["hidden_dim"],
             dropout=cfg["model"]["dropout"],
+        )
+    elif model_name == "hybrid_attention_mil":
+        return HybridAttentionMIL(
+            input_dim=cfg["model"]["input_dim"],
+            attention_dim=cfg["model"].get("attention_dim", 128),
+            hidden_dim=cfg["model"]["hidden_dim"],
+            dropout=cfg["model"]["dropout"],
+            n_attention_heads=cfg["model"].get("n_attention_heads", 2),
+            include_mean=cfg["model"].get("include_mean", True),
+            fusion=cfg["model"].get("fusion", "concat"),
+            diversity_weight=cfg["model"].get("diversity_weight", 0.0),
+            use_coords=cfg["model"].get("use_coords", False),
+            coord_hidden_dim=cfg["model"].get("coord_hidden_dim", 32),
+            coord_embed_dim=cfg["model"].get("coord_embed_dim", 32),
         )
     elif model_name == "region_attention_mil":
         return RegionAttentionMIL(

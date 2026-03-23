@@ -20,12 +20,32 @@ This document describes the implemented behavior behind:
 
 The goal here is to document the true code path, not just the config intent.
 
+## Additional Mainline Experiments
+
+The repo now includes follow-up mainline configs that extend the original fair comparison
+without changing the data loader or training entrypoint:
+
+| Config | Implemented model | Key idea |
+| --- | --- | --- |
+| `configs/uni_hybrid_attention_mean2.yaml` | `HybridAttentionMIL` | fuse mean pooling with two attention-pooled summaries before the final MLP |
+| `configs/uni_attention_spatial_fair.yaml` | coordinate-aware `AttentionMIL` | encode normalised patch coordinates into the attention scorer |
+| `configs/uni_hybrid_attention_spatial_mean2.yaml` | coordinate-aware `HybridAttentionMIL` | combine mean pooling, multiple attention branches, and coordinate-aware scoring |
+
+These experiments are intended to probe the current bottleneck identified by the existing results:
+aggregation quality, especially whether the model can use saliency and spatial structure without
+giving up the stability of mean pooling.
+
 ## Common I/O Conventions
 
 - Input to all three models is a single slide bag of UNI patch embeddings:
   - `x`: `[N, 1024]`
   - `N` = number of patches in the bag
-- `coords` are loaded with shape `[N, 2]` but are not used by any of these three models.
+- `coords` are loaded with shape `[N, 2]`.
+- In the original fair-comparison trio (`uni_mean`, `uni_attention`, `paper_reproduction`),
+  `coords` are loaded but unused.
+- In the newer spatial variants (`uni_attention_spatial_fair.yaml`,
+  `uni_hybrid_attention_spatial_mean2.yaml`), coordinates are normalised per slide and encoded
+  into the attention scorer only; the classifier still consumes pooled UNI feature summaries.
 - Each model outputs:
   - `logit`: scalar `[]`
   - `slide_embedding`: `[1024]` for `uni_mean` and `uni_attention`
@@ -234,6 +254,35 @@ prob >= 0.5 in many analysis scripts"]
   - softmax-normalized weights interact multiplicatively with the original embeddings
   - the weighted sum becomes the slide representation
 
+### Spatial extension: `uni_attention_spatial_fair.yaml`
+
+The coordinate-aware attention variant keeps the pooled representation and classifier head
+unchanged but augments the attention scorer input:
+
+- normalise each slide's coordinates to `[0,1]`
+- encode `(x,y)` with a small MLP
+- concatenate that coordinate embedding to the UNI feature before computing attention logits
+- still aggregate the original UNI features rather than the concatenated feature+coordinate vector
+
+This isolates spatial information to the weighting function.
+
+## `uni_hybrid_attention_mean2.yaml`
+
+`HybridAttentionMIL` is a small multi-aggregation model:
+
+- one branch computes mean pooling over the bag
+- two attention heads compute independent weighted sums over the same bag
+- branch summaries are concatenated into a single slide embedding
+- an MLP classifier maps the fused embedding to the logit
+- an optional diversity penalty discourages the two attention heads from collapsing onto the
+  same patch subset
+
+### Spatial extension: `uni_hybrid_attention_spatial_mean2.yaml`
+
+The spatial hybrid uses the same coordinate encoder as the spatial attention model, but only in
+the attention branches. The mean branch remains purely feature-based, so the experiment tests
+whether spatially informed weighting adds value on top of the stable non-spatial baseline branch.
+
 ## `paper_reproduction.yaml`
 
 ### True forward path
@@ -305,6 +354,11 @@ prob >= 0.5 in many analysis scripts"]
 - For all three configs, the data split is case-grouped and stratified.
 - `batch_size=1` means each optimization step processes one slide bag.
 - These three models ignore coordinates entirely, even though coordinates are available.
+- TransformerMIL uses no positional encoding: patches are fed to the transformer in arbitrary
+  bag order. The self-attention layers learn relationships between patch embeddings, but with
+  no spatial or sequential position signal. This matches the approach in the original Myles et al.
+  paper, which also does not use positional information in its MIL aggregation. Extending to
+  spatial coordinates (e.g. sinusoidal (x,y) position embeddings) is noted in `docs/future_work.md`.
 
 ## Source Files
 

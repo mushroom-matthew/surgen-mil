@@ -39,3 +39,129 @@
   would give better uncertainty estimates on performance.
 - **Spatial attention**: The `coords` field is loaded but ignored by all three main models. Region-based
   or spatial attention (see `uni_region_attention_*.yaml`) is a natural extension.
+
+## E: Clinical Interpretability via Multi-Head Attention and Tissue Phenotype Discovery
+
+### Motivation
+
+The current `AttentionMIL` assigns a single scalar weight to each patch. A high-attention patch is
+"important" — but important *how*? The model cannot distinguish between, for example, a patch
+containing a tumour-infiltrating lymphocyte cluster (which may signal MSI-H) and a patch of
+necrotic debris (which may be a confound). A clinician reviewing an attention heatmap has no way to
+decompose what each region is contributing or why.
+
+Multi-head attention, already scaffolded in `HybridAttentionMIL`, provides a path toward this. If
+each head specialises on a distinct tissue phenotype, the resulting attention maps become
+interpretable in morphological terms: head 1 highlights stroma, head 2 highlights tumour
+epithelium, head 3 highlights immune infiltrate. The classifier then learns which *combination* of
+tissue compartment signals predicts MSI/MMR status.
+
+### Tissue phenotypes expected in colorectal cancer slides
+
+A histopathologist reviewing H&E sections of colorectal cancer would expect to find the following
+recurring patch-level structures, which likely occupy distinct regions of the UNI embedding space:
+
+| Phenotype | Relevance to MSI/MMR |
+|---|---|
+| Tumour epithelium (glandular) | Core signal; poorly differentiated glands are MSI-H associated |
+| Tumour-infiltrating lymphocytes (TILs) | Strong MSI-H marker; Crohn's-like reaction |
+| Stroma (desmoplastic) | Background; may dilute signal in high-stroma slides |
+| Mucin pools / mucinous differentiation | Associated with MSI-H in some subtypes |
+| Necrosis | Common in high-grade tumours; potentially confounding |
+| Normal mucosa / smooth muscle | Off-tumour tissue; ideally low attention |
+| Immune aggregates (peritumoral) | Peritumoral lymphocytic infiltration, MSI-H association |
+
+This suggests somewhere between **4 and 7** meaningful phenotype clusters in a typical CRC dataset.
+The crude clustering analysis in `scripts/patch_embedding_viz.py` (see below) is a first empirical
+estimate of how many clusters the UNI embeddings naturally support before any label supervision.
+
+### Relationship to head count in HybridAttentionMIL
+
+The optimal number of attention heads is loosely bounded by the number of *task-relevant* tissue
+phenotypes. Too few heads and phenotypically distinct patches (e.g. TILs vs tumour glands) are
+pooled into a single summary vector, losing discriminative information. Too many heads and the
+diversity penalty is required to prevent collapse, adding a hyperparameter whose tuning is
+unjustified without clinical grounding.
+
+A practical strategy:
+
+1. Run `scripts/patch_embedding_viz.py` to estimate the number of natural patch clusters in the
+   embedding space (k = 2–8, evaluated by silhouette score).
+2. Request a clinical expert to annotate representative tiles per cluster — this validates whether
+   the clusters correspond to recognisable tissue types.
+3. Use the clinically validated cluster count as the starting point for `n_attention_heads` in
+   `HybridAttentionMIL`.
+4. After training, inspect per-head attention maps and check whether spatial heatmaps for each head
+   co-localise with the morphological regions identified in step 2.
+
+### Crude initial analysis: patch embedding clusters
+
+**Script**: `scripts/patch_embedding_viz.py`
+
+The script samples a small number of patches per slide across the full dataset, reduces
+dimensionality with PCA (→ 50 components), projects to 3D with UMAP, and applies k-means for
+k ∈ {2..8}. It outputs:
+
+- Silhouette scores per k, to identify the natural cluster count empirically
+- An interactive 3D Plotly scatter (HTML) with colour toggles:
+  - Cluster assignment (for each k)
+  - Slide MSI/MMR label (to see whether clusters are label-correlated or purely morphological)
+  - Cohort (SR1482 vs SR386), to detect embedding-space cohort effects
+
+**Interpretation guidance**: if the silhouette curve peaks at k=5 and the 3D UMAP shows 5 visually
+separable blobs, that is strong evidence for 5 meaningful tissue phenotypes in the embedding space
+and suggests `n_attention_heads = 4` or `5` (leaving one head plus mean pooling for the
+classifier). If clusters are label-correlated (MSI-H patches concentrated in one or two clusters),
+the multi-head model has a clear mechanistic story to offer a clinician.
+
+### From multi-head attention to transformer architecture
+
+If multi-head attention proves capable of robustly differentiating tissue phenotypes — i.e. heads
+reliably specialise and their spatial heatmaps align with clinically recognisable structures — that
+result is a strong signal that a full transformer encoder over the patch sequence would be the
+natural next step.
+
+The reasoning is direct: `HybridAttentionMIL` computes attention independently per head and pools
+each head's weighted sum into a fixed vector before the classifier. There is no interaction between
+patches during aggregation — each patch "votes" in isolation. A transformer, by contrast, allows
+patches to contextualise each other through self-attention before any pooling occurs. A TIL patch
+adjacent to a tumour gland can attend to that gland and produce a richer representation than it
+could in isolation. This is precisely the kind of spatial reasoning a pathologist performs when
+reading a slide.
+
+The progression in terms of model maturity and interpretability would be:
+
+```
+AttentionMIL (single scalar weight per patch)
+    ↓  multi-head attention proves tissue specialisation
+HybridAttentionMIL (K independent heads, each attending to a phenotype)
+    ↓  heads are stable, clinically validated, and task-relevant
+Transformer encoder (patches interact; context-aware representations before pooling)
+```
+
+Two practical architectures at the transformer stage are worth considering:
+
+- **TRANSMIL** (Shao et al., 2021): adapts the standard transformer encoder directly to the MIL
+  setting with a correlated position encoding scheme; a near drop-in upgrade from attention MIL.
+- **HIPT** (Chen et al., 2022): hierarchical image pyramid transformer that processes patches at
+  multiple scales, more closely mirroring the multi-scale reasoning of a pathologist.
+
+Critically, the interpretability case for the transformer is only well-founded if the multi-head
+attention step has already produced clinically legible heads. Without that validation, a transformer
+is a black box with more parameters. The multi-head analysis is therefore not just a stepping stone
+in model performance — it is the interpretability foundation that would make a transformer
+architecture clinically trustworthy.
+
+### Limitations and caveats
+
+- UNI is a foundation model trained on a broad pathology corpus; its embedding space reflects
+  general morphological structure, not MSI-specific features. Clusters found here are tissue
+  phenotype clusters, not necessarily task-relevant ones.
+- Patch-level ground truth (which tile contains which tissue type) does not exist in this dataset.
+  Clinical annotation is required to validate cluster identity.
+- The diversity penalty in `HybridAttentionMIL` is a soft constraint. Without label-supervised
+  head specialisation (e.g. auxiliary patch-level classification losses), heads may not align with
+  clinically interpretable phenotypes even if the correct head count is chosen.
+- Spatial context matters: a TIL cluster at the tumour invasive margin is more informative than
+  TILs in the centre. Combining head specialisation with the spatial coordinate encoder
+  (`CoordinateEncoder`) is a natural next step.

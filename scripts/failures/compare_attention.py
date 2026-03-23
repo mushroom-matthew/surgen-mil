@@ -47,6 +47,9 @@ MODELS: dict[str, str] = {
     # Fair comparison runs
     "MeanPool (fair)":      "outputs/uni_mean_fair",
     "Attn MIL (fair)":      "outputs/uni_attention_fair",
+    "Attn MIL + coords":    "outputs/uni_attention_spatial_fair",
+    "Hybrid Attn + Mean":   "outputs/uni_hybrid_attention_mean2",
+    "Hybrid + coords":      "outputs/uni_hybrid_attention_spatial_mean2",
     "Paper Repro (fair)":   "outputs/paper_reproduction_fair",
 }
 
@@ -149,6 +152,7 @@ def extract_scores(
     features: np.ndarray,
     coords: np.ndarray,
     device: torch.device,
+    multihead_mode: str = "mean",
 ) -> tuple[float, np.ndarray | None, np.ndarray | None, str]:
     """Returns (prob, scores, coords, score_type) where score_type is one of
     'attention', 'instance', 'region', 'grad-saliency', or 'none'."""
@@ -158,6 +162,17 @@ def extract_scores(
         out = model(x, coords=c)
         prob = torch.sigmoid(out["logit"].view(())).item()
 
+        if "attention_weights_multi" in out:
+            attn_multi = out["attention_weights_multi"].cpu().numpy()  # [H, N]
+            if multihead_mode == "mean":
+                scores = attn_multi.mean(axis=0)
+            elif multihead_mode == "max":
+                scores = attn_multi.max(axis=0)
+            elif multihead_mode == "head0":
+                scores = attn_multi[0]
+            else:
+                raise ValueError(f"Unknown multihead_mode: {multihead_mode}")
+            return prob, scores, coords, f"attention-multi({multihead_mode},H={attn_multi.shape[0]})"
         if "attention_weights" in out:
             return prob, out["attention_weights"].cpu().numpy(), coords, "attention"
         if "instance_scores" in out:
@@ -173,6 +188,45 @@ def extract_scores(
     # Fallback: integrated gradients (requires grad, so outside no_grad block)
     prob, saliency = _integrated_gradients(model, features, coords, device)
     return prob, saliency, coords, "integ-grad"
+
+
+def extract_score_panels(
+    model,
+    features: np.ndarray,
+    coords: np.ndarray,
+    device: torch.device,
+    multihead_mode: str = "mean",
+    show_multihead_panels: bool = True,
+) -> list[tuple[str, float, np.ndarray | None, np.ndarray | None]]:
+    with torch.no_grad():
+        x = torch.tensor(features, dtype=torch.float32).to(device)
+        c = torch.tensor(coords, dtype=torch.float32).to(device)
+        out = model(x, coords=c)
+        prob = torch.sigmoid(out["logit"].view(())).item()
+
+        if "attention_weights_multi" in out:
+            attn_multi = out["attention_weights_multi"].cpu().numpy()  # [H, N]
+            if multihead_mode == "mean":
+                agg_scores = attn_multi.mean(axis=0)
+            elif multihead_mode == "max":
+                agg_scores = attn_multi.max(axis=0)
+            elif multihead_mode == "head0":
+                agg_scores = attn_multi[0]
+            else:
+                raise ValueError(f"Unknown multihead_mode: {multihead_mode}")
+
+            panels = [
+                (f"attention-multi({multihead_mode},H={attn_multi.shape[0]})", prob, agg_scores, coords)
+            ]
+            if show_multihead_panels:
+                for head_idx in range(attn_multi.shape[0]):
+                    panels.append((f"head {head_idx}", prob, attn_multi[head_idx], coords))
+            return panels
+
+    prob, scores, eff_coords, score_type = extract_scores(
+        model, features, coords, device, multihead_mode=multihead_mode
+    )
+    return [(score_type, prob, scores, eff_coords)]
 
 
 def normalise(scores: np.ndarray) -> np.ndarray:
@@ -413,7 +467,13 @@ def make_seed_grid_figure(
     out: Path,
     threshold: float = 0.5,
 ) -> None:
-    model_names = [n for n in MODELS if n in grid_data and grid_data[n]]
+    model_names = []
+    for base_name in MODELS:
+        derived = sorted(
+            name for name in grid_data
+            if name == base_name or name.startswith(f"{base_name} [")
+        )
+        model_names.extend([name for name in derived if grid_data[name]])
     if not model_names:
         print(f"  No grid data for {slide_id}.")
         return
@@ -504,6 +564,8 @@ def run_slide_default(
     data_root: str,
     out: Path,
     threshold: float = 0.5,
+    multihead_mode: str = "mean",
+    show_multihead_panels: bool = True,
 ) -> None:
     rec_idx = next(
         (i for i, r in enumerate(provider.records) if r.slide_id == slide_id), None
@@ -530,11 +592,16 @@ def run_slide_default(
             print(f"  SKIP {name}: no config for run {run_label}")
             continue
         model = _load_model(cfg_path, ckpt_path, device)
-        prob, scores, eff_coords, score_type = extract_scores(model, features, coords, device)
-        tag = score_type if scores is not None else "no patch scores"
-        print(f"    {name:25s}  run={run_label}  prob={prob:.4f}  [{tag}]")
-        display_name = f"{name}\n[{tag}]"
-        results.append((display_name, prob, scores, eff_coords))
+        panels = extract_score_panels(
+            model, features, coords, device,
+            multihead_mode=multihead_mode,
+            show_multihead_panels=show_multihead_panels,
+        )
+        for panel_label, prob, scores, eff_coords in panels:
+            tag = panel_label if scores is not None else "no patch scores"
+            print(f"    {name:25s}  run={run_label}  prob={prob:.4f}  [{tag}]")
+            display_name = f"{name}\n[{tag}]"
+            results.append((display_name, prob, scores, eff_coords))
 
     make_comparison_figure(
         slide_id, label, category, features, coords, results,
@@ -552,6 +619,8 @@ def run_slide_seed_grid(
     data_root: str,
     out: Path,
     threshold: float = 0.5,
+    multihead_mode: str = "mean",
+    show_multihead_panels: bool = True,
 ) -> None:
     rec_idx = next(
         (i for i, r in enumerate(provider.records) if r.slide_id == slide_id), None
@@ -578,10 +647,16 @@ def run_slide_seed_grid(
                 print(f"    SKIP {name} run={run_label}: no config")
                 continue
             model = _load_model(cfg_path, ckpt_path, device)
-            prob, scores, eff_coords, score_type = extract_scores(model, features, coords, device)
-            tag = score_type if scores is not None else "no scores"
-            print(f"    {name:25s}  run={run_label}  prob={prob:.4f}  [{tag}]")
-            grid_data[name][run_label] = (prob, scores, eff_coords)
+            panels = extract_score_panels(
+                model, features, coords, device,
+                multihead_mode=multihead_mode,
+                show_multihead_panels=show_multihead_panels,
+            )
+            for panel_label, prob, scores, eff_coords in panels:
+                row_name = name if panel_label.startswith("attention") or panel_label in {"instance", "region", "integ-grad"} else f"{name} [{panel_label}]"
+                tag = panel_label if scores is not None else "no scores"
+                print(f"    {row_name:25s}  run={run_label}  prob={prob:.4f}  [{tag}]")
+                grid_data.setdefault(row_name, {})[run_label] = (prob, scores, eff_coords)
 
     make_seed_grid_figure(
         slide_id, label, category, features, coords, grid_data,
@@ -608,6 +683,10 @@ def main():
                         help="Slides per category in --auto mode")
     parser.add_argument("--threshold",  type=float, default=0.5)
     parser.add_argument("--split",      default="test")
+    parser.add_argument("--multihead_mode", choices=["mean", "max", "head0"], default="mean",
+                        help="How to collapse multi-head attention for visualisation")
+    parser.add_argument("--no_multihead_panels", action="store_true",
+                        help="Disable per-head panels for multi-head attention models")
     parser.add_argument("--out",        default="outputs/attention_viz")
     args = parser.parse_args()
 
@@ -633,7 +712,8 @@ def main():
 
     if args.slide_id:
         run_fn(args.slide_id, "single", provider, device, args.topk, data_root, out,
-               threshold=args.threshold)
+               threshold=args.threshold, multihead_mode=args.multihead_mode,
+               show_multihead_panels=not args.no_multihead_panels)
     else:
         categories = select_slides(args.threshold, args.n_examples, args.split)
         for category in ("tp", "fp", "fn", "tn"):
@@ -643,7 +723,8 @@ def main():
                 continue
             for slide_id in slide_ids:
                 run_fn(slide_id, category, provider, device, args.topk, data_root, out,
-                       threshold=args.threshold)
+                       threshold=args.threshold, multihead_mode=args.multihead_mode,
+                       show_multihead_panels=not args.no_multihead_panels)
 
 
 if __name__ == "__main__":

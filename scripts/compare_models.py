@@ -109,6 +109,7 @@ def load_run(run_dir: Path) -> dict | None:
 
     slide = metrics.get("test", metrics)
     case = _case_level_metrics(test_preds) if not test_preds.empty else {}
+    cohort = cohort_run_rows(test_preds) if not test_preds.empty else []
 
     return {
         "run": run_dir.name,
@@ -117,6 +118,7 @@ def load_run(run_dir: Path) -> dict | None:
         "slide_auprc": slide.get("auprc"),
         "temperature": metrics.get("temperature"),
         "case": case,
+        "cohort": cohort,
         "test_preds": test_preds,
         "val_preds": val_preds,
         "history": history,
@@ -180,6 +182,97 @@ def _average_preds(runs: list[dict], key: str) -> tuple[pd.DataFrame, str]:
             key=lambda r: r.get("slide_auroc") or 0.0,
         )
         return best[key].copy(), f"seed {best['seed']} (splits differ)"
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap CI + ECE + cohort helpers
+# ---------------------------------------------------------------------------
+
+def bootstrap_auroc_ci(
+    y_true: np.ndarray,
+    y_score: np.ndarray,
+    n: int = 1000,
+    seed: int = 0,
+    alpha: float = 0.05,
+) -> tuple[float | None, float | None]:
+    from sklearn.metrics import roc_auc_score
+    rng = np.random.default_rng(seed)
+    n_samples = len(y_true)
+    scores = []
+    for _ in range(n):
+        idx = rng.integers(0, n_samples, size=n_samples)
+        yt, ys = y_true[idx], y_score[idx]
+        if len(np.unique(yt)) < 2:
+            continue
+        scores.append(roc_auc_score(yt, ys))
+    if len(scores) < 10:
+        return None, None
+    return float(np.percentile(scores, 100 * alpha / 2)), float(np.percentile(scores, 100 * (1 - alpha / 2)))
+
+
+def expected_calibration_error(y_true: np.ndarray, y_probs: np.ndarray, n_bins: int = 10) -> float | None:
+    y_true = np.asarray(y_true)
+    y_probs = np.asarray(y_probs)
+    if len(np.unique(y_true)) < 2:
+        return None
+    bins = np.linspace(0, 1, n_bins + 1)
+    ece = 0.0
+    n = len(y_true)
+    for lo, hi in zip(bins[:-1], bins[1:]):
+        mask = (y_probs >= lo) & (y_probs < hi)
+        if mask.sum() == 0:
+            continue
+        ece += (mask.sum() / n) * abs(y_true[mask].mean() - y_probs[mask].mean())
+    return float(ece)
+
+
+def _cohort_from_slide_id(slide_id: str) -> str:
+    if slide_id.startswith("SR1482"):
+        return "SR1482"
+    if slide_id.startswith("SR386"):
+        return "SR386"
+    return "unknown"
+
+
+def cohort_metrics(test_preds: pd.DataFrame) -> dict[str, dict]:
+    from sklearn.metrics import roc_auc_score, average_precision_score
+    df = test_preds.copy()
+    df["cohort"] = df["slide_id"].apply(_cohort_from_slide_id)
+    out: dict[str, dict] = {}
+    for cohort, group in df.groupby("cohort"):
+        n = len(group)
+        if group["label"].nunique() < 2:
+            out[cohort] = {"auroc": None, "auprc": None, "n": n}
+        else:
+            out[cohort] = {
+                "auroc": float(roc_auc_score(group["label"], group["prob"])),
+                "auprc": float(average_precision_score(group["label"], group["prob"])),
+                "n": n,
+            }
+    return out
+
+
+def cohort_run_rows(test_preds: pd.DataFrame) -> list[dict]:
+    rows = []
+    for cohort, metrics in sorted(cohort_metrics(test_preds).items()):
+        rows.append({
+            "cohort": cohort,
+            "auroc": metrics.get("auroc"),
+            "auprc": metrics.get("auprc"),
+            "n": metrics.get("n"),
+        })
+    return rows
+
+
+def adaptive_unit_ylim(values: list[float] | np.ndarray, min_floor_trigger: float = 0.15) -> tuple[float, float]:
+    finite = np.asarray([v for v in values if v is not None and np.isfinite(v)], dtype=float)
+    if finite.size == 0:
+        return (0.0, 1.0)
+    min_val = float(finite.min())
+    if min_val < min_floor_trigger:
+        return (0.0, 1.0)
+    lower = max(0.0, min_val - 0.1)
+    return (lower, 1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +354,8 @@ def plot_metric_summary(
         ax.set_xticklabels(model_names, rotation=20, ha="right", fontsize=8)
         ax.set_ylabel(label)
         ax.set_title(label)
-        ax.set_ylim(0, 1)
+        ylim = adaptive_unit_ylim([v for vals in all_vals for v in vals])
+        ax.set_ylim(*ylim)
         ax.grid(True, axis="y", alpha=0.3)
 
     fig.tight_layout()
@@ -281,6 +375,8 @@ def plot_roc_pr(model_runs: dict[str, list[dict]], out_path: Path) -> None:
         roc_auc_score, average_precision_score,
     )
     fig, (ax_roc, ax_pr) = plt.subplots(1, 2, figsize=(12, 5))
+    roc_tpr_vals: list[float] = []
+    pr_precision_vals: list[float] = []
 
     for (name, runs), color in zip(model_runs.items(), PALETTE):
         avg_test, note = _average_preds(runs, "test_preds")
@@ -290,16 +386,20 @@ def plot_roc_pr(model_runs: dict[str, list[dict]], out_path: Path) -> None:
         y_score = avg_test["prob"].values
         auroc = roc_auc_score(y_true, y_score)
         auprc = average_precision_score(y_true, y_score)
-        RocCurveDisplay.from_predictions(
+        roc_disp = RocCurveDisplay.from_predictions(
             y_true, y_score, name=f"{name} ({note})  AUROC={auroc:.3f}",
             ax=ax_roc, color=color)
-        PrecisionRecallDisplay.from_predictions(
+        pr_disp = PrecisionRecallDisplay.from_predictions(
             y_true, y_score, name=f"{name} ({note})  AUPRC={auprc:.3f}",
             ax=ax_pr, color=color)
+        roc_tpr_vals.extend(roc_disp.line_.get_ydata().tolist())
+        pr_precision_vals.extend(pr_disp.line_.get_ydata().tolist())
 
     ax_roc.axvline(0, color="none")  # ensure axis exists
     ax_roc.plot([0, 1], [0, 1], "k--", lw=0.8, label="Chance")
     ax_roc.set_title("ROC Curve (test)", fontsize=12)
+    ax_roc.set_xlim(0, 1)
+    ax_roc.set_ylim(*adaptive_unit_ylim(roc_tpr_vals))
     ax_roc.legend(fontsize=8)
     ax_roc.grid(True, alpha=0.3)
 
@@ -312,6 +412,8 @@ def plot_roc_pr(model_runs: dict[str, list[dict]], out_path: Path) -> None:
                           label=f"Chance ({prevalence:.2f})")
             break
     ax_pr.set_title("Precision-Recall Curve (test)", fontsize=12)
+    ax_pr.set_xlim(0, 1)
+    ax_pr.set_ylim(*adaptive_unit_ylim(pr_precision_vals))
     ax_pr.legend(fontsize=8)
     ax_pr.grid(True, alpha=0.3)
 
@@ -408,6 +510,7 @@ def plot_calibration(model_runs: dict[str, list[dict]], out_path: Path, n_bins: 
     from sklearn.calibration import calibration_curve
     fig, ax = plt.subplots(figsize=(6, 5))
     ax.plot([0, 1], [0, 1], "k--", lw=0.8, label="Perfect calibration")
+    frac_pos_vals: list[float] = []
 
     for (name, runs), color in zip(model_runs.items(), PALETTE):
         avg_test, note = _average_preds(runs, "test_preds")
@@ -416,12 +519,17 @@ def plot_calibration(model_runs: dict[str, list[dict]], out_path: Path, n_bins: 
         frac_pos, mean_pred = calibration_curve(
             avg_test["label"], avg_test["prob"], n_bins=n_bins, strategy="uniform"
         )
+        frac_pos_vals.extend(frac_pos.tolist())
+        ece = expected_calibration_error(avg_test["label"].values, avg_test["prob"].values, n_bins=n_bins)
+        ece_str = f"ECE={ece:.3f}" if ece is not None else ""
         ax.plot(mean_pred, frac_pos, marker="o", color=color, linewidth=1.5, markersize=5,
-                label=f"{name} ({note})")
+                label=f"{name} ({note}) {ece_str}")
 
     ax.set_xlabel("Mean predicted probability")
     ax.set_ylabel("Fraction of positives")
     ax.set_title("Calibration (test)", fontsize=12)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(*adaptive_unit_ylim(frac_pos_vals))
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
@@ -507,6 +615,7 @@ def plot_training_curves(model_runs: dict[str, list[dict]], out_path: Path) -> N
 
     for row, (name, runs) in enumerate(model_runs.items()):
         ax_auroc, ax_auprc, ax_loss = axes[row]
+        auroc_vals, auprc_vals = [], []
         for i, run in enumerate(runs):
             hist = run.get("history")
             if not hist:
@@ -515,6 +624,8 @@ def plot_training_curves(model_runs: dict[str, list[dict]], out_path: Path) -> N
             val_auroc  = [h.get("val_auroc")  for h in hist]
             val_auprc  = [h.get("val_auprc")  for h in hist]
             train_loss = [h.get("train_loss") for h in hist]
+            auroc_vals.extend([v for v in val_auroc if v is not None])
+            auprc_vals.extend([v for v in val_auprc if v is not None])
             label = f"seed {run['seed']} (run {run['run']})"
             color = PALETTE[i % len(PALETTE)]
             kw = dict(color=color, linewidth=1.5, marker="o", markersize=3, label=label)
@@ -531,11 +642,98 @@ def plot_training_curves(model_runs: dict[str, list[dict]], out_path: Path) -> N
             ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
             if ylim:
                 ax.set_ylim(*ylim)
+        ax_auroc.set_ylim(*adaptive_unit_ylim(auroc_vals))
+        ax_auprc.set_ylim(*adaptive_unit_ylim(auprc_vals))
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     print(f"Saved {out_path}")
+
+
+def plot_cohort_metric_summary(model_runs: dict[str, list[dict]], out_path: Path) -> None:
+    cohorts = sorted({
+        row["cohort"]
+        for runs in model_runs.values()
+        for run in runs
+        for row in run.get("cohort", [])
+    })
+    if not cohorts:
+        return
+
+    metrics = [("auroc", "Cohort AUROC"), ("auprc", "Cohort AUPRC")]
+    model_names = list(model_runs.keys())
+    x_pos = np.arange(len(model_names))
+    rng = np.random.default_rng(0)
+
+    fig, axes = plt.subplots(
+        len(metrics),
+        len(cohorts),
+        figsize=(4.8 * len(cohorts), 4.5 * len(metrics)),
+        squeeze=False,
+    )
+
+    for row_idx, (metric_key, metric_label) in enumerate(metrics):
+        metric_all_vals = []
+        for col_idx, cohort in enumerate(cohorts):
+            ax = axes[row_idx, col_idx]
+            means, stds, all_vals = [], [], []
+            for model_name in model_names:
+                vals = []
+                for run in model_runs[model_name]:
+                    cohort_rows = [r for r in run.get("cohort", []) if r["cohort"] == cohort]
+                    for rec in cohort_rows:
+                        val = rec.get(metric_key)
+                        if val is not None:
+                            vals.append(val)
+                all_vals.append(vals)
+                metric_all_vals.extend(vals)
+                means.append(np.mean(vals) if vals else np.nan)
+                stds.append(np.std(vals) if len(vals) > 1 else 0.0)
+
+            colors = [PALETTE[i % len(PALETTE)] for i in range(len(model_names))]
+            ax.bar(x_pos, means, yerr=stds, capsize=4, color=colors, alpha=0.6, width=0.5)
+            for xi, vals in zip(x_pos, all_vals):
+                jitter = rng.uniform(-0.1, 0.1, size=len(vals))
+                ax.scatter(xi + jitter, vals, color="black", s=25, alpha=0.75, zorder=3)
+
+            if metric_key == "auroc":
+                ax.axhline(PAPER_AUROC, color="red", linestyle="--", linewidth=1.0, alpha=0.7)
+            ax.set_xticks(x_pos)
+            ax.set_xticklabels(model_names, rotation=20, ha="right", fontsize=8)
+            ax.set_title(cohort)
+            if col_idx == 0:
+                ax.set_ylabel(metric_label)
+            ax.grid(True, axis="y", alpha=0.3)
+        ylim = adaptive_unit_ylim(metric_all_vals)
+        for col_idx in range(len(cohorts)):
+            axes[row_idx, col_idx].set_ylim(*ylim)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved {out_path}")
+
+
+def write_cohort_run_summary(model_runs: dict[str, list[dict]], out_path: Path) -> pd.DataFrame:
+    rows = []
+    for model_name, runs in model_runs.items():
+        for run in runs:
+            for cohort_row in run.get("cohort", []):
+                rows.append({
+                    "model": model_name,
+                    "run": run.get("run"),
+                    "seed": run.get("seed"),
+                    "cohort": cohort_row.get("cohort"),
+                    "cohort_auroc": cohort_row.get("auroc"),
+                    "cohort_auprc": cohort_row.get("auprc"),
+                    "n": cohort_row.get("n"),
+                })
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df.to_csv(out_path, index=False)
+        print(f"Saved {out_path}")
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -580,6 +778,41 @@ def main():
     print(f"  {'[paper baseline]':40s}  AUROC: {PAPER_AUROC:.3f}         AUPRC: N/A             (reference)")
     print(f"\nSummary saved to {summary_csv}")
 
+    # Extended summary: bootstrap CIs, ECE, per-cohort AUROC
+    print("\n=== Extended Summary (averaged predictions across seeds) ===")
+    ext_rows = []
+    for name, runs in model_runs.items():
+        avg_test, note = _average_preds(runs, "test_preds")
+        if avg_test.empty or avg_test["label"].nunique() < 2:
+            print(f"  {name}: insufficient test predictions")
+            continue
+        y_true  = avg_test["label"].values
+        y_score = avg_test["prob"].values
+        lo, hi = bootstrap_auroc_ci(y_true, y_score)
+        ece = expected_calibration_error(y_true, y_score)
+        ci_str  = f"[{lo:.3f}, {hi:.3f}]" if lo is not None else "N/A"
+        ece_str = f"{ece:.3f}" if ece is not None else "N/A"
+        print(f"  {name}  AUROC 95% CI: {ci_str}  ECE: {ece_str}")
+        per_cohort = cohort_metrics(avg_test)
+        for cohort, m in sorted(per_cohort.items()):
+            auroc_c = f"{m['auroc']:.3f}" if m["auroc"] is not None else "N/A"
+            auprc_c = f"{m['auprc']:.3f}" if m["auprc"] is not None else "N/A"
+            print(f"    {cohort} (n={m['n']}): AUROC={auroc_c}  AUPRC={auprc_c}")
+        ext_rows.append({
+            "model": name,
+            "auroc_ci_lo": lo,
+            "auroc_ci_hi": hi,
+            "ece": ece,
+            **{f"{c}_auroc": m["auroc"] for c, m in per_cohort.items()},
+            **{f"{c}_n": m["n"]    for c, m in per_cohort.items()},
+        })
+    if ext_rows:
+        ext_csv = out_dir / "summary_extended.csv"
+        pd.DataFrame(ext_rows).to_csv(ext_csv, index=False)
+        print(f"\nExtended summary saved to {ext_csv}")
+
+    write_cohort_run_summary(model_runs, out_dir / "cohort_runs.csv")
+
     # Figures
     plot_metric_summary(model_runs, out_dir / "summary_metrics.png", case_agg=args.case_agg)
     plot_roc_pr(model_runs, out_dir / "roc_pr_curves.png")
@@ -588,6 +821,7 @@ def main():
     plot_calibration(model_runs, out_dir / "calibration.png")
     plot_score_distributions(model_runs, out_dir / "score_distributions.png", case_agg=args.case_agg)
     plot_training_curves(model_runs, out_dir / "training_curves.png")
+    plot_cohort_metric_summary(model_runs, out_dir / "cohort_metrics.png")
 
 
 if __name__ == "__main__":

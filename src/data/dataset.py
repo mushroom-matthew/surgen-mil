@@ -28,6 +28,7 @@ class SurgenBagDataset(Dataset):
 
         return {
             "slide_id": item["slide_id"],
+            "cohort": item["cohort"],
             "features": torch.tensor(features, dtype=torch.float32),
             "coords": torch.tensor(coords, dtype=torch.float32),
             "label": torch.tensor(item["label"], dtype=torch.float32),
