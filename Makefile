@@ -1,4 +1,4 @@
-.PHONY: smoke test train-mean train-attention train-transformer fair-comparison multisplit-updates multisplit-analyse appendix appendix-tables compare evaluate attn-auto attn-seed-grid attn-slide attn-stats errors error-report help
+.PHONY: smoke test train-mean train-attention train-transformer fair-comparison multisplit-updates multisplit-analyse multisplit-attn appendix appendix-tables compare evaluate attn-auto attn-seed-grid attn-slide attn-stats errors error-report help
 
 smoke:  ## Run smoke test with synthetic data
 	python scripts/smoke_test.py
@@ -23,6 +23,9 @@ multisplit-updates:  ## Train mainline updated suite across split seeds 0/1/2
 
 multisplit-analyse:  ## Analyse outputs/multisplit with overall + per-split reports
 	python scripts/compare_multisplit.py
+
+multisplit-attn:  ## Attention visualisations for all multisplit models across split 0/1/2
+	bash scripts/run_multisplit_attention_viz.sh
 
 appendix:  ## Train all appendix models with 3 seeds each
 	bash scripts/run_appendix.sh

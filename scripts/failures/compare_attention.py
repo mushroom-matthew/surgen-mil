@@ -54,6 +54,16 @@ MODELS: dict[str, str] = {
 }
 
 
+def load_models(models_file: str | None) -> dict[str, str]:
+    if models_file is None:
+        return MODELS
+    with open(models_file) as f:
+        loaded = yaml.safe_load(f) or {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Expected mapping in models file: {models_file}")
+    return {str(name): str(path) for name, path in loaded.items()}
+
+
 # ---------------------------------------------------------------------------
 # Versioned layout helpers
 # ---------------------------------------------------------------------------
@@ -272,6 +282,7 @@ def _load_czi_thumbnail(slide_id: str, data_root: str, scale_factor: float = 0.0
 # ---------------------------------------------------------------------------
 
 def select_slides(
+    models: dict[str, str],
     threshold: float = 0.5,
     n_examples: int = 3,
     split: str = "test",
@@ -286,7 +297,7 @@ def select_slides(
     export_failure_manifest.py, but generalised to all four outcomes.
     """
     rows = []
-    for name, base in MODELS.items():
+    for name, base in models.items():
         entries = enumerate_seeds(Path(base))
         if not entries:
             print(f"  SKIP {name}: no checkpoints found")
@@ -465,10 +476,11 @@ def make_seed_grid_figure(
     topk: int,
     data_root: str,
     out: Path,
+    model_order: list[str],
     threshold: float = 0.5,
 ) -> None:
     model_names = []
-    for base_name in MODELS:
+    for base_name in model_order:
         derived = sorted(
             name for name in grid_data
             if name == base_name or name.startswith(f"{base_name} [")
@@ -563,6 +575,7 @@ def run_slide_default(
     topk: int,
     data_root: str,
     out: Path,
+    models: dict[str, str],
     threshold: float = 0.5,
     multihead_mode: str = "mean",
     show_multihead_panels: bool = True,
@@ -581,7 +594,7 @@ def run_slide_default(
     print(f"\n[{category.upper()}] {slide_id}  label={label}  patches={len(features)}")
 
     results = []
-    for name, base in MODELS.items():
+    for name, base in models.items():
         seeds = enumerate_seeds(Path(base))
         if not seeds:
             print(f"  SKIP {name}: no checkpoint found")
@@ -618,6 +631,7 @@ def run_slide_seed_grid(
     topk: int,
     data_root: str,
     out: Path,
+    models: dict[str, str],
     threshold: float = 0.5,
     multihead_mode: str = "mean",
     show_multihead_panels: bool = True,
@@ -636,7 +650,7 @@ def run_slide_seed_grid(
     print(f"\n[{category.upper()}] {slide_id}  label={label}  patches={len(features)}")
 
     grid_data: dict[str, dict[str, tuple]] = {}
-    for name, base in MODELS.items():
+    for name, base in models.items():
         seeds = enumerate_seeds(Path(base))
         if not seeds:
             print(f"  SKIP {name}: no checkpoints found")
@@ -661,6 +675,7 @@ def run_slide_seed_grid(
     make_seed_grid_figure(
         slide_id, label, category, features, coords, grid_data,
         topk=min(topk, len(features)), data_root=data_root, out=out,
+        model_order=list(models.keys()),
         threshold=threshold,
     )
 
@@ -687,14 +702,17 @@ def main():
                         help="How to collapse multi-head attention for visualisation")
     parser.add_argument("--no_multihead_panels", action="store_true",
                         help="Disable per-head panels for multi-head attention models")
+    parser.add_argument("--models_file",
+                        help="Optional YAML mapping of display names to output directories")
     parser.add_argument("--out",        default="outputs/attention_viz")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    models = load_models(args.models_file)
 
     # Resolve data root from first available config
     data_root = None
-    for base in MODELS.values():
+    for base in models.values():
         seeds = enumerate_seeds(Path(base))
         if seeds:
             _, cfg_path, _ = seeds[0]
@@ -711,18 +729,18 @@ def main():
     run_fn = run_slide_seed_grid if args.seed_grid else run_slide_default
 
     if args.slide_id:
-        run_fn(args.slide_id, "single", provider, device, args.topk, data_root, out,
+        run_fn(args.slide_id, "single", provider, device, args.topk, data_root, out, models,
                threshold=args.threshold, multihead_mode=args.multihead_mode,
                show_multihead_panels=not args.no_multihead_panels)
     else:
-        categories = select_slides(args.threshold, args.n_examples, args.split)
+        categories = select_slides(models, args.threshold, args.n_examples, args.split)
         for category in ("tp", "fp", "fn", "tn"):
             slide_ids = categories.get(category, [])
             if not slide_ids:
                 print(f"  No slides for category: {category}")
                 continue
             for slide_id in slide_ids:
-                run_fn(slide_id, category, provider, device, args.topk, data_root, out,
+                run_fn(slide_id, category, provider, device, args.topk, data_root, out, models,
                        threshold=args.threshold, multihead_mode=args.multihead_mode,
                        show_multihead_panels=not args.no_multihead_panels)
 

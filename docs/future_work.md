@@ -10,7 +10,31 @@
   may be harder cases. Using diagnostics from `inspect_attention.py` as confidence proxies is worth
   exploring.
 
-## B: Data-Centric Improvements
+## B: Data Augmentation
+
+Data augmentation is an open area of interest for this project. The current pipeline applies no
+augmentation at any stage — UNI embeddings are precomputed and fixed, and bag construction is
+the only source of stochasticity during training. Whether augmentation could meaningfully improve
+performance or robustness at this sample size is an open question.
+
+Directions worth exploring:
+
+- **Bag-level augmentation**: randomly drop patches, shuffle bag order, or duplicate patches with
+  additive noise before aggregation — analogous to dropout at the evidence level.
+- **Embedding-space perturbation**: add small Gaussian noise to patch embeddings during training.
+  This is a rough proxy for the variability that would arise from re-extracting features under
+  slightly different preprocessing conditions.
+- **Stain normalisation effects**: if raw tiles are available, training on slides normalised to
+  different reference stains (Macenko, Vahadane) may simulate scanner/protocol variation.
+- **Mixup at the slide level**: interpolate two slide embeddings and their labels as a
+  regularisation strategy — this is established in standard MIL literature but unexplored here.
+- **Synthetic minority oversampling**: generate synthetic positive-class bag embeddings by
+  interpolating between known positive slides in embedding space, to address class imbalance
+  beyond loss reweighting.
+
+No strong prior exists for which of these will help at this scale; empirical ablation is needed.
+
+## C: Data-Centric Improvements
 
 - **Cohort effects**: SR1482 and SR386 have different label conventions and patient populations.
   Cohort-aware training or evaluation would clarify generalisability.
@@ -21,7 +45,7 @@
 - **Sample size sensitivity**: Repeated cross-validation with different train fractions would
   characterise how performance degrades with fewer cases.
 
-## C: Additional Tasks
+## D: Additional Tasks
 
 - **Mutation status**: KRAS, NRAS, BRAF status prediction from the same embeddings.
 - **Multi-task learning**: Joint prediction of MSI, MMR, and mutation status may regularise feature use.
@@ -29,18 +53,52 @@
 - **Case-vs-slide aggregation**: A dedicated case-level model (aggregating across multiple slides per
   patient) could improve performance when multiple slides are available.
 
-## D: Method Questions
+## E: Method Questions
 
 - **Robust sparse aggregation**: Top-k attention is sensitive to k choice. Learned sparsity (e.g.,
   attention with regularisation) may be more principled.
 - **Uncertainty-aware attention**: Modelling uncertainty over which patches are relevant, rather than
   point-estimate attention weights.
-- **Repeated cross-validation**: Single train/val/test split is high-variance at small N. Nested CV
-  would give better uncertainty estimates on performance.
-- **Spatial attention**: The `coords` field is loaded but ignored by all three main models. Region-based
-  or spatial attention (see `uni_region_attention_*.yaml`) is a natural extension.
+- **Repeated cross-validation**: Multi-split evaluation across `split_seed ∈ {0,1,2}` is now
+  supported via `--override data.split_seed=N` and `scripts/run_main_multisplit_updates.sh`.
+  This gives a first estimate of split-sensitivity. True nested CV remains a longer-term goal.
+- **Spatial attention**: A rough coordinate extension is now implemented — per-slide min-max
+  normalised `(x,y)` encoded via a small MLP and concatenated into the attention scorer input.
+  This is a first test of whether absolute position helps weight selection; it does not encode
+  inter-patch distances or neighbourhood structure. Region-based pooling (`uni_region_attention_*.yaml`)
+  is a stronger form of spatial reasoning and a natural next step.
 
-## E: Clinical Interpretability via Multi-Head Attention and Tissue Phenotype Discovery
+## F: Clinical Interpretability via Multi-Head Attention and Tissue Phenotype Discovery
+
+### Current status
+
+`HybridAttentionMIL` (mean pooling + two independent attention heads + optional diversity penalty)
+has been implemented and shows early promise. Initial runs suggest it may offer better stability
+than single-head `AttentionMIL`, though results across the full multi-split, multi-seed grid are
+still being collected.
+
+### Immediate priorities
+
+The next round of work should focus on understanding what makes multi-head attention training
+stable or unstable before adding further architectural complexity:
+
+1. **Head count**: Two heads is a starting point, not a principled choice. Run ablations over
+   `n_heads ∈ {1, 2, 4, 6}` at fixed penalty weight to separate the effect of head count from
+   the effect of regularisation.
+
+2. **Diversity penalty weight**: The aux_loss coefficient in `HybridAttentionMIL` controls how
+   strongly heads are pushed apart. Too weak and heads collapse onto the same patches; too strong
+   and heads are forced to attend to uninformative regions. Grid-search or schedule the penalty
+   weight (`lam ∈ {0, 0.01, 0.05, 0.1, 0.5}`) and inspect per-head attention entropy as a proxy
+   for whether heads have genuinely specialised.
+
+3. **Initialisation**: Attention weight initialisation affects early-epoch gradient flow. Worth
+   testing orthogonal initialisation of the two attention scorer heads as a diversity-promoting
+   prior, versus the default PyTorch initialisation.
+
+4. **Evaluation criterion**: Use cross-seed AUROC variance (not just mean) as the primary
+   stability metric. A head configuration that reduces variance from ±0.020 to ±0.008 at the
+   same mean AUROC is a meaningful improvement even if mean AUROC is unchanged.
 
 ### Motivation
 
