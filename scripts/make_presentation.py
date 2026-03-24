@@ -233,7 +233,19 @@ def make_cohort_grouped_plot(out_path: Path):
     ax.set_xticklabels([label_map[m] for m in order], rotation=12, ha="right")
     ax.set_ylabel("Cohort AUROC")
     ax.set_title("Cohort AUROC by Model\nBars: mean across 9 runs, dots: split means")
-    ax.set_ylim(0.75, 0.98)
+    lower_candidates = []
+    upper_candidates = []
+    for model in order:
+        for cohort in cohorts:
+            row = agg[(agg["model"] == model) & (agg["cohort"] == cohort)].iloc[0]
+            lower_candidates.append(float(row["mean"]) - float(row["std"] if not pd.isna(row["std"]) else 0.0))
+            upper_candidates.append(float(row["mean"]) + float(row["std"] if not pd.isna(row["std"]) else 0.0))
+            vals = split_sub.loc[split_sub["model"] == model, metric_col[cohort]].tolist()
+            lower_candidates.extend(vals)
+            upper_candidates.extend(vals)
+    y_lo = max(0.0, min(lower_candidates) - 0.03)
+    y_hi = min(1.0, max(upper_candidates) + 0.02)
+    ax.set_ylim(y_lo, y_hi)
     ax.grid(True, axis="y", alpha=0.25)
     ax.legend(frameon=False, ncol=2, loc="upper left")
     fig.tight_layout()
@@ -850,7 +862,7 @@ bullet_list(sl, [
 sl = slide()
 bg(sl)
 header_bar(sl, "Appendix B — Focal Loss vs Weighted BCE for AttentionMIL",
-           "Use the figures to talk about score distributions and calibration, not just the metric table")
+           "Focal loss raises AUPRC, lowers AUROC slightly, and produces a different score profile")
 
 ablation_table(
     sl,
@@ -863,24 +875,25 @@ ablation_table(
     [RGBColor(0xE8,0xF4,0xF8), RGBColor(0xF0,0xF4,0xFB)],
     col_ws=[2.6, 2.5, 2.4, 2.4, 1.95],
     t_top=1.3,
-    note="Focal loss trades ~0.5pp AUROC for ~4pp AUPRC gain. The plots below are better evidence for how the score behaviour changes.",
+    note="Weighted BCE: 0.869 ± 0.020 AUROC, 0.381 ± 0.052 AUPRC. Focal: 0.863 ± 0.014 AUROC, 0.420 ± 0.066 AUPRC.",
 )
 
-cal_path = OUT / "calibration.png"
-err_path = OUT / "error_distributions.png"
-if cal_path.exists():
-    img(sl, cal_path, 0.35, 3.65, 4.15)
-    caption(sl, "Calibration after temperature scaling", 0.35, 6.82, 4.15)
-if err_path.exists():
-    img(sl, err_path, 4.8, 3.65, 5.1)
-    caption(sl, "Seed-averaged score distributions and thresholds", 4.8, 6.82, 5.1)
+bf_base = REPO / "outputs" / "analysis" / "appendix_b_focal_fixed"
+bf_roc = bf_base / "roc_pr_curves.png"
+bf_scores = bf_base / "score_distributions.png"
+if bf_roc.exists():
+    img(sl, bf_roc, 0.35, 3.65, 5.9)
+    caption(sl, "ROC / PR comparison: weighted BCE vs focal", 0.35, 6.82, 5.9)
+if bf_scores.exists():
+    img(sl, bf_scores, 6.55, 3.65, 4.5)
+    caption(sl, "Seed-averaged score distributions and thresholds", 6.55, 6.82, 4.5)
 
-txbox(sl, "What the figures support", 10.15, 3.65, 2.8, 0.35, font_size=15, bold=True, color=NAVY)
+txbox(sl, "Interpretation", 11.25, 3.65, 1.65, 0.35, font_size=15, bold=True, color=NAVY)
 bullet_list(sl, [
-    "Focal loss changes score shape, not just one summary metric",
-    "AUPRC rises, but variance also rises: ±0.066 vs ±0.052",
-    "Use this framing for a recall-oriented use case, not a blanket claim about calibration",
-], l=10.15, t=4.05, w=2.8, h=2.7, font_size=12, indent_char="▸ ")
+    "PR improves, ROC softens slightly",
+    "AUPRC variance rises: ±0.066 vs ±0.052",
+    "Useful when positive-class retrieval matters more than raw ranking",
+], l=11.25, t=4.05, w=1.65, h=2.7, font_size=11, indent_char="▸ ")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SLIDE 18 — Appendix C: Top-k sparse evidence
