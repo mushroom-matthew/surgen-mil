@@ -294,10 +294,10 @@ sections = [
          "MeanPool vs AttentionMIL vs TransformerMIL (paper reproduction)"),
     ("5", "Ablation Studies",
          "Loss functions, sparse evidence, sampler strategies"),
-    ("6", "Attention Visualization",
-         "Where are models looking? TP / FP / FN / TN maps"),
-    ("7", "Multi-Split Stability & Extended Models",
+    ("6", "Multi-Split Stability & Extended Models",
          "9-model comparison · hybrid attention wins · spatial coordinate effects"),
+    ("7", "Attention Visualization",
+         "4-model comparisons after multisplit: MeanPool, AttentionMIL, TransformerMIL, HybridAttentionMIL"),
     ("8", "Summary & Future Directions",
          "Key findings and what's next"),
 ]
@@ -1002,63 +1002,7 @@ bullet_list(sl, [
 # ═══════════════════════════════════════════════════════════════════════════════
 
 sl = slide()
-section_divider(sl, 6, "Attention Visualization",
-                "Representative success and failure cases from the core fair-comparison models")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SLIDE: Representative successes
-# ─────────────────────────────────────────────────────────────────────────────
-sl = slide()
-bg(sl)
-header_bar(sl, "Attention Maps — Representative Successes",
-           "Left to right in each panel: H&E, experimental attention, MeanPool IG, AttentionMIL, TransformerMIL IG")
-
-tp_fig = FIG / "attn_tp_SR386_T402.png"
-tn_fig = FIG / "attn_tn_SR386_T129.png"
-if tp_fig.exists():
-    img(sl, tp_fig, 0.35, 1.25, 12.6)
-    caption(sl, "True positive: all models confidently identify MSI-H", 0.35, 3.55, 12.6)
-if tn_fig.exists():
-    img(sl, tn_fig, 0.35, 3.95, 12.6)
-    caption(sl, "True negative: all models correctly suppress the positive class", 0.35, 6.32, 12.6)
-
-txbox(sl, "Takeaways", 0.35, 6.6, 12.6, 0.3, font_size=15, bold=True, color=NAVY)
-bullet_list(sl, [
-    "These examples only use models already introduced in the fair comparison; hybrid/spatial variants appear later in section 7",
-    "When the case is easy, the maps are broadly consistent across methods: distributed positive evidence in the TP, uniformly low attribution in the TN",
-    "MeanPool integrated gradients often track the learned attention maps, which argues the signal is not purely an attention artifact",
-], l=0.35, t=6.92, w=12.6, h=0.45, font_size=12, indent_char="▸ ")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SLIDE: Representative failures
-# ─────────────────────────────────────────────────────────────────────────────
-sl = slide()
-bg(sl)
-header_bar(sl, "Attention Maps — Representative Failures",
-           "Same left-to-right order: H&E, experimental attention, MeanPool IG, AttentionMIL, TransformerMIL IG")
-
-fp_fig = FIG / "attn_fp_SR1482_T061.png"
-fn_fig = FIG / "attn_fn_SR386_T436.png"
-if fp_fig.exists():
-    img(sl, fp_fig, 0.35, 1.25, 12.6)
-    caption(sl, "False positive: all models are confidently wrong on the same slide", 0.35, 3.55, 12.6)
-if fn_fig.exists():
-    img(sl, fn_fig, 0.35, 3.95, 12.6)
-    caption(sl, "False negative: some attention signal is present, but the fair-comparison models do not recover it reliably", 0.35, 6.32, 12.6)
-
-txbox(sl, "Takeaways", 0.35, 6.6, 12.6, 0.3, font_size=15, bold=True, color=NAVY)
-bullet_list(sl, [
-    "The false positive is a systematic morphology-mimic error, not a one-seed anomaly",
-    "The false negative shows that signal can be present yet unstable under weak supervision; attention-based aggregation sometimes recovers it, but not reliably enough",
-    "The failure story motivates section 7: improve stability first, then add architectural complexity",
-], l=0.35, t=6.92, w=12.6, h=0.45, font_size=12, indent_char="▸ ")
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# ── SECTION 7 ─────────────────────────────────────────────────────────────────
-# ═══════════════════════════════════════════════════════════════════════════════
-
-sl = slide()
-section_divider(sl, 7, "Multi-Split Stability & Extended Models",
+section_divider(sl, 6, "Multi-Split Stability & Extended Models",
                 "3 splits × 3 seeds · hybrid attention · spatial variants")
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1287,6 +1231,43 @@ bullet_list(sl, [
     "Stable side-by-side cohort performance suggests the label reconciliation and case-grouping fixes are doing their job",
     "The right next step is external generalisation, not retreating to cohort-specific tuning too early",
 ], l=8.85, t=5.62, w=4.1, h=1.55, font_size=13, indent_char="▸ ")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ── SECTION 7 ─────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+sl = slide()
+section_divider(sl, 7, "Attention Visualization",
+                "4-model comparisons after multisplit: MeanPool, AttentionMIL, TransformerMIL, HybridAttentionMIL")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SLIDE 26 — Attention comparison (true positive)
+# ─────────────────────────────────────────────────────────────────────────────
+sl = slide()
+bg(sl)
+header_bar(sl, "Representative Attention Comparison",
+           "True positive example across MeanPool, AttentionMIL, TransformerMIL, and HybridAttentionMIL")
+
+tp_path = REPO / "outputs" / "presentation_attention_cmp" / "single_SR1482_40X_HE_T372_01_compare_attention.png"
+if tp_path.exists():
+    img(sl, tp_path, 0.35, 1.3, 12.63)
+    caption(sl, "Model order is fixed left-to-right: MeanPool, AttentionMIL, TransformerMIL, HybridAttentionMIL.",
+            0.35, 6.82, 12.63)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SLIDE 27 — Attention comparison (false positive)
+# ─────────────────────────────────────────────────────────────────────────────
+sl = slide()
+bg(sl)
+header_bar(sl, "Representative Attention Comparison",
+           "False positive example across MeanPool, AttentionMIL, TransformerMIL, and HybridAttentionMIL")
+
+fp_path = REPO / "outputs" / "presentation_attention_cmp" / "single_SR1482_40X_HE_T147_02_compare_attention.png"
+if fp_path.exists():
+    img(sl, fp_path, 0.35, 1.3, 12.63)
+    caption(sl, "These comparisons use the rerun 4-model figure set in the requested order for direct visual comparison.",
+            0.35, 6.82, 12.63)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
