@@ -109,13 +109,14 @@ pip install torch --index-url https://download.pytorch.org/whl/cu118
 # 1. Verify installation (no real data needed)
 make smoke
 
-# 2. Train a model
-python train.py --config configs/uni_mean_fair.yaml --seed 42
+# 2. Run unit tests
+make test
 
-# 3. Evaluate a checkpoint
-python scripts/evaluate.py \
-  --config configs/uni_mean_fair.yaml \
-  --checkpoint outputs/uni_mean_fair/runs/001/model.pt
+# 3. Train a fair-comparison baseline
+make train-mean
+
+# 4. Evaluate the latest checkpoint for a config
+make evaluate CONFIG=configs/uni_mean_fair.yaml
 ```
 
 Training note:
@@ -145,16 +146,12 @@ Set `data.root` in your config to point to this directory. See `docs/data_format
 Train all three models with three seeds each (parallel streams, fixed split):
 
 ```bash
-bash scripts/run_fair_comparison.sh
+make fair-comparison
 ```
 
 Summarise results:
 ```bash
-python scripts/compare_models.py \
-  --configs configs/uni_mean_fair.yaml \
-            configs/uni_attention_fair.yaml \
-            configs/paper_reproduction_fair.yaml \
-  --out outputs/comparison
+make compare
 ```
 
 ## Multi-Split Mainline Updates
@@ -166,6 +163,7 @@ The expanded mainline sweep includes the original fair-comparison trio plus:
 - `configs/uni_hybrid_attention_mean2.yaml`
 - `configs/uni_attention_spatial_fair.yaml`
 - `configs/uni_hybrid_attention_spatial_mean2.yaml`
+- `configs/uni_transformer_spatial_fair.yaml` via the dedicated transformer launcher below
 
 Run the full suite across split seeds `{0,1,2}` and training seeds `{42,123,456}` with:
 
@@ -184,13 +182,43 @@ If a config already has canonical runs in its original output directory for the 
 (for example the existing split-0 fair-comparison runs), the launcher skips retraining and
 creates a symlink into the `outputs/multisplit/` tree instead.
 
+Generate the multisplit summary tables and plots with:
+
+```bash
+make multisplit-analyse
+```
+
+Generate multisplit attention visualisations with:
+
+```bash
+make multisplit-attn
+```
+
+Run the spatial TransformerMIL multisplit sweep with:
+
+```bash
+bash scripts/run_transformer_spatial_multisplit.sh
+```
+
+or with reduced parallelism:
+
+```bash
+MAX_PARALLEL=2 bash scripts/run_transformer_spatial_multisplit.sh
+```
+
+Representative multisplit analysis plots:
+
+![Multisplit lines](outputs/multisplit/analysis/multisplit_lines.png)
+
+![Multisplit cohort lines](outputs/multisplit/analysis/multisplit_cohort_lines.png)
+
 ---
 
 ## Reproducing Appendix Analyses
 
 ```bash
 # Train appendix models
-bash scripts/run_appendix.sh
+make appendix
 
 # Train Phase 1 sampler ablation
 bash scripts/run_phase1_sampler_ablation.sh
@@ -203,7 +231,7 @@ python scripts/sampler_diagnostics.py \
   --split train --repeats 3 --out outputs/sampler_diagnostics
 
 # Generate appendix tables (A, B, C)
-python scripts/appendix_tables.py --out outputs/appendix_tables.csv
+make appendix-tables
 ```
 
 See `docs/appendix.md` for interpretation of each section.
@@ -227,9 +255,14 @@ probability across model×seed combinations:
 # Auto-select representative TP/FP/FN/TN slides (3 per category)
 make attn-auto
 
-# Or directly:
-python scripts/failures/compare_attention.py \
-    --auto --n_examples 3 --topk 100 --out outputs/attention_viz
+# Seed-variance grid
+make attn-seed-grid
+
+# Single-slide view
+make attn-slide SLIDE_ID=SR1482_40X_HE_T1_0
+
+# Attention statistics from the latest AttentionMIL checkpoint
+make attn-stats
 ```
 
 Slides are selected by ranking: for each category (TP/FP/FN/TN), slides are ranked by how
@@ -241,12 +274,50 @@ False positive (true MSS, all models predict MSI — systematic failure):
 
 ![FP attention example](docs/figures/attn_fp_SR1482_T061.png)
 
+True positive (true MSI, models consistently recover the signal):
+
+![TP attention example](docs/figures/attn_tp_SR1482_T297.png)
+
 True negative (true MSS, all models correctly suppress):
 
 ![TN attention example](docs/figures/attn_tn_SR386_T129.png)
 
+False negative (true MSI, model evidence remains weak or diffuse):
+
+![FN attention example](docs/figures/attn_fn_SR386_T436.png)
+
 See `docs/attention_visualization.md` for full usage, figure layout, colormap details,
 and interpretation guidance.
+
+## Make Targets
+
+The `Makefile` is the fastest way to discover the current command surface:
+
+```bash
+make help
+```
+
+Common targets:
+
+- `make smoke`
+- `make test`
+- `make train-mean`
+- `make train-attention`
+- `make train-transformer`
+- `make fair-comparison`
+- `make multisplit-updates`
+- `make multisplit-analyse`
+- `make multisplit-attn`
+- `make appendix`
+- `make appendix-tables`
+- `make compare`
+- `make evaluate CONFIG=...`
+- `make attn-auto`
+- `make attn-seed-grid`
+- `make attn-slide SLIDE_ID=...`
+- `make attn-stats`
+- `make errors`
+- `make error-report`
 
 ---
 

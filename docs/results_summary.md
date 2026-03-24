@@ -41,6 +41,44 @@ Confusion matrices use seed-averaged predictions with Youden J threshold fit on 
 3. AttentionMIL shows higher cross-seed variance (±0.020) than MeanPool (±0.005). Whether this reflects training instability, signal absence in some seeds, or both is not directly resolved by this experiment. A direct test would compare held-out performance as a function of training set size or fix random initialisation while varying bag sampling.
 4. In this experiment, TopK-16 training improves AUPRC but reduces AUROC relative to full-bag AttentionMIL; neither configuration dominates across metrics.
 
+## Multi-Split Comparison
+
+To reduce dependence on any single case-grouped partition, the mainline models were also evaluated
+across `split_seed ∈ {0,1,2}` and training seeds `{42,123,456}`, giving 9 runs per model. This is
+the same framing used in the current presentation deck: multisplit performance is the more reliable
+summary of expected behaviour, while the fixed-split fair comparison remains useful for controlled
+apples-to-apples plots.
+
+| Model | AUROC (mean ± std) | AUPRC (mean ± std) | Interpretation |
+|-------|--------------------|--------------------|----------------|
+| HybridAttentionMIL (mean + 2 heads) | 0.903 ± 0.035 | 0.591 ± 0.058 | best overall performer |
+| AttentionMIL | 0.900 ± 0.032 | 0.532 ± 0.128 | strong mean AUROC, high AUPRC variance |
+| HybridAttentionMIL + coords | 0.897 ± 0.040 | 0.541 ± 0.074 | spatial encoding is effectively neutral here |
+| Gated AttentionMIL | 0.896 ± 0.040 | 0.516 ± 0.138 | competitive AUROC, unstable AUPRC |
+| MeanVar Pool | 0.895 ± 0.027 | 0.497 ± 0.084 | strong non-attention baseline |
+| AttentionMIL + coords | 0.882 ± 0.041 | 0.485 ± 0.146 | spatial coordinates hurt plain attention |
+| MeanPool | 0.877 ± 0.033 | 0.495 ± 0.050 | stable baseline, still competitive |
+| Spatial TransformerMIL | 0.859 ± 0.056 | 0.465 ± 0.115 | slight AUROC gain vs no-coords transformer, still poor/high-variance |
+| TransformerMIL (paper repro) | 0.850 ± 0.066 | 0.508 ± 0.123 | worst AUROC, highest variance |
+
+### Multi-Split Interpretation
+
+- **Hybrid attention is the clearest winner.** Combining mean pooling with two learned attention
+  heads gives the best overall AUROC and AUPRC, with variance that stays in the same range as plain
+  AttentionMIL despite higher capacity.
+- **Frozen UNI embeddings remain the main story.** MeanPool, MeanVar, AttentionMIL, and the hybrid
+  models all perform well enough that the limiting factor is reliable aggregation, not lack of
+  discriminative patch features.
+- **Spatial coordinates are model-dependent.** They are harmful for plain AttentionMIL, essentially
+  neutral for the hybrid, and only slightly improve transformer AUROC while leaving transformer
+  variance high.
+- **The transformer result is now more concrete.** Adding the small MLP coordinate branch does not
+  rescue TransformerMIL. The correct framing is not "transformers need coordinates and will likely
+  recover", but "this simple coordinate injection is insufficient at the current data scale."
+
+The current presentation deck uses this multisplit framing as the primary summary because it is
+less sensitive to one lucky or unlucky split than the original fixed-split table.
+
 ## Appendix Results
 
 ### Appendix A — Aggregator and loss ablations

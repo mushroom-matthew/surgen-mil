@@ -64,18 +64,27 @@ No strong prior exists for which of these will help at this scale; empirical abl
   This gives a first estimate of split-sensitivity. True nested CV remains a longer-term goal.
 - **Spatial attention**: A rough coordinate extension is now implemented — per-slide min-max
   normalised `(x,y)` encoded via a small MLP and concatenated into the attention scorer input.
-  This is a first test of whether absolute position helps weight selection; it does not encode
-  inter-patch distances or neighbourhood structure. Region-based pooling (`uni_region_attention_*.yaml`)
-  is a stronger form of spatial reasoning and a natural next step.
+  In the current multisplit results this hurts plain `AttentionMIL` and is effectively neutral for
+  the hybrid model, so the lesson is not that spatial information is useless, but that a weak
+  learned absolute-position branch is not enough. It does not encode inter-patch distances or
+  neighbourhood structure. Region-based pooling (`uni_region_attention_*.yaml`) and stronger priors
+  such as sinusoidal or rotary encodings are more defensible next steps.
 
 ## F: Clinical Interpretability via Multi-Head Attention and Tissue Phenotype Discovery
 
 ### Current status
 
 `HybridAttentionMIL` (mean pooling + two independent attention heads + optional diversity penalty)
-has been implemented and shows early promise. Initial runs suggest it may offer better stability
-than single-head `AttentionMIL`, though results across the full multi-split, multi-seed grid are
-still being collected.
+has now been evaluated across the full 3-split × 3-seed multisplit grid. The current summary is:
+
+- `HybridAttentionMIL`: AUROC `0.903 ± 0.035`, AUPRC `0.591 ± 0.058` — best overall model
+- `HybridAttentionMIL + coords`: AUROC `0.897 ± 0.040`, AUPRC `0.541 ± 0.074` — essentially neutral
+  relative to the non-spatial hybrid
+- `AttentionMIL`: AUROC `0.900 ± 0.032`, AUPRC `0.532 ± 0.128`
+
+So the framing should now be decisive rather than tentative: the hybrid architecture is the
+current multisplit winner, and mean-pool anchoring improves robustness enough to justify treating
+it as the mainline architecture for follow-up work.
 
 ### Immediate priorities
 
@@ -97,8 +106,9 @@ stable or unstable before adding further architectural complexity:
    prior, versus the default PyTorch initialisation.
 
 4. **Evaluation criterion**: Use cross-seed AUROC variance (not just mean) as the primary
-   stability metric. A head configuration that reduces variance from ±0.020 to ±0.008 at the
-   same mean AUROC is a meaningful improvement even if mean AUROC is unchanged.
+   stability metric. In practice this should now be extended to the multisplit setting: a head
+   configuration that preserves AUROC while tightening both seed-level and split-level variance is
+   more valuable than a fragile mean-only gain.
 
 ### Motivation
 
@@ -179,6 +189,16 @@ reliably specialise and their spatial heatmaps align with clinically recognisabl
 result is a strong signal that a full transformer encoder over the patch sequence would be the
 natural next step.
 
+The current transformer evidence should narrow that claim. Plain `TransformerMIL` is weak on the
+multisplit benchmark (`0.850 ± 0.066` AUROC), and adding the current MLP coordinate encoder only
+nudges it to `0.859 ± 0.056` while leaving variance high. So "move to a transformer next" is not
+the right operational recommendation. The more defensible path is:
+
+1. Use `HybridAttentionMIL` as the strong baseline.
+2. Validate whether heads specialise in clinically legible ways.
+3. If richer spatial reasoning is still justified, try transformer variants with stronger spatial
+   inductive bias rather than the current weak absolute-coordinate concatenation.
+
 The reasoning is direct: `HybridAttentionMIL` computes attention independently per head and pools
 each head's weighted sum into a fixed vector before the classifier. There is no interaction between
 patches during aggregation — each patch "votes" in isolation. A transformer, by contrast, allows
@@ -197,7 +217,8 @@ HybridAttentionMIL (K independent heads, each attending to a phenotype)
 Transformer encoder (patches interact; context-aware representations before pooling)
 ```
 
-Two practical architectures at the transformer stage are worth considering:
+Two practical architectures at the transformer stage are worth considering, but only after a
+stronger spatial prior is chosen:
 
 - **TRANSMIL** (Shao et al., 2021): adapts the standard transformer encoder directly to the MIL
   setting with a correlated position encoding scheme; a near drop-in upgrade from attention MIL.
@@ -205,10 +226,10 @@ Two practical architectures at the transformer stage are worth considering:
   multiple scales, more closely mirroring the multi-scale reasoning of a pathologist.
 
 Critically, the interpretability case for the transformer is only well-founded if the multi-head
-attention step has already produced clinically legible heads. Without that validation, a transformer
-is a black box with more parameters. The multi-head analysis is therefore not just a stepping stone
-in model performance — it is the interpretability foundation that would make a transformer
-architecture clinically trustworthy.
+attention step has already produced clinically legible heads. Without that validation, and given
+the current weak multisplit transformer results, a transformer is just a larger black box with no
+clear empirical upside. The multi-head analysis is therefore not just a stepping stone in model
+performance; it is the standard a transformer variant now has to beat.
 
 ### Limitations and caveats
 
@@ -221,5 +242,7 @@ architecture clinically trustworthy.
   head specialisation (e.g. auxiliary patch-level classification losses), heads may not align with
   clinically interpretable phenotypes even if the correct head count is chosen.
 - Spatial context matters: a TIL cluster at the tumour invasive margin is more informative than
-  TILs in the centre. Combining head specialisation with the spatial coordinate encoder
-  (`CoordinateEncoder`) is a natural next step.
+  TILs in the centre. But the current `CoordinateEncoder` result suggests that simply appending a
+  learned absolute-position embedding is too weak. Future spatial work should prefer stronger
+  inductive bias: structured positional encodings, region-level aggregation, or architectures that
+  model neighbourhood structure explicitly.
