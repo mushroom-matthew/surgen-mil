@@ -131,7 +131,7 @@ def _integrated_gradients(
     features: np.ndarray,
     coords: np.ndarray,
     device: torch.device,
-    n_steps: int = 50,
+    n_steps: int = 16,
 ) -> tuple[float, np.ndarray]:
     """Integrated Gradients: attributions = (x - baseline) * avg_grad along path.
     Baseline is the zero embedding. Per-patch importance is the L2 norm of the
@@ -410,6 +410,7 @@ def make_comparison_figure(
     data_root: str,
     out: Path,
     threshold: float = 0.5,
+    presentation_layout: bool = False,
 ) -> None:
     scored = [(n, p, sc, ec) for n, p, sc, ec in results if sc is not None]
     czi_result = _load_czi_thumbnail(slide_id, data_root)
@@ -419,39 +420,74 @@ def make_comparison_figure(
         print(f"  No panels for {slide_id}.")
         return
 
-    fig, axes = plt.subplots(1, n_panels, figsize=(7 * n_panels, 7))
-    if n_panels == 1:
-        axes = [axes]
-
     label_str  = "MSI" if label == 1 else "MSS"
     cat_labels = {"tp": "True Positive", "fp": "False Positive", "fn": "False Negative", "tn": "True Negative"}
-    fig.suptitle(
+    title = (
         f"{slide_id}  |  True: {label_str}  |  {cat_labels.get(category, category)}  "
-        f"|  threshold={threshold:.2f}",
-        fontsize=11, y=1.01,
+        f"|  threshold={threshold:.2f}"
     )
 
-    ax_idx = 0
-    if czi_result is not None:
-        img_rgb, slide_w, slide_h = czi_result
-        ax = axes[ax_idx]; ax_idx += 1
-        ax.imshow(img_rgb, extent=[0, slide_w, slide_h, 0], aspect="equal")
-        if scored:
-            _, _, s0, c0 = scored[0]
-            tk = np.argsort(normalise(s0))[-topk:]
-            ax.scatter(c0[tk, 0], c0[tk, 1], s=55,
-                       facecolors="none", edgecolors="cyan", linewidths=1.1,
-                       label=f"Top-{topk}")
-            ax.legend(fontsize=8, loc="lower right")
-        ax.set_title("H&E (CZI)", fontsize=9)
-        ax.set_xlabel("x"); ax.set_ylabel("y")
+    if presentation_layout:
+        fig, axes = plt.subplots(2, 3, figsize=(18, 10), squeeze=False)
+        fig.suptitle(title, fontsize=13, y=0.98)
+        panel_slots = {
+            "MeanPool": (0, 0),
+            "AttentionMIL": (0, 1),
+            "TransformerMIL": (0, 2),
+            "HybridAttentionMIL": (1, 0),
+            "HybridAttentionMIL [head 0]": (1, 1),
+            "HybridAttentionMIL [head 1]": (1, 2),
+        }
+        used = set()
+        for name, prob, scores, eff_coords in scored:
+            base = name.split("\n")[0]
+            tag = name.split("[", 1)[1].rstrip("]") if "[" in name else ""
+            if base == "HybridAttentionMIL" and tag.startswith("attention-multi"):
+                key = "HybridAttentionMIL"
+            elif base == "HybridAttentionMIL" and tag in {"head 0", "head 1"}:
+                key = f"HybridAttentionMIL [{tag}]"
+            else:
+                key = base
+            if key not in panel_slots:
+                continue
+            r, c = panel_slots[key]
+            scores_norm = log_normalise(scores)
+            topk_idx = np.argsort(scores_norm)[-topk:]
+            outcome = _outcome_label(prob, label, threshold)
+            panel_title = key if key != "HybridAttentionMIL" else "HybridAttentionMIL\n[mean over heads]"
+            _scatter_panel(axes[r][c], eff_coords, scores_norm, topk_idx, panel_title, prob, outcome)
+            used.add((r, c))
+        for r in range(2):
+            for c in range(3):
+                if (r, c) not in used:
+                    axes[r][c].axis("off")
+    else:
+        fig, axes = plt.subplots(1, n_panels, figsize=(7 * n_panels, 7))
+        if n_panels == 1:
+            axes = [axes]
+        fig.suptitle(title, fontsize=11, y=1.01)
 
-    for name, prob, scores, eff_coords in scored:
-        scores_norm = log_normalise(scores)
-        topk_idx    = np.argsort(scores_norm)[-topk:]
-        outcome     = _outcome_label(prob, label, threshold)
-        _scatter_panel(axes[ax_idx], eff_coords, scores_norm, topk_idx, name, prob, outcome)
-        ax_idx += 1
+        ax_idx = 0
+        if czi_result is not None:
+            img_rgb, slide_w, slide_h = czi_result
+            ax = axes[ax_idx]; ax_idx += 1
+            ax.imshow(img_rgb, extent=[0, slide_w, slide_h, 0], aspect="equal")
+            if scored:
+                _, _, s0, c0 = scored[0]
+                tk = np.argsort(normalise(s0))[-topk:]
+                ax.scatter(c0[tk, 0], c0[tk, 1], s=55,
+                           facecolors="none", edgecolors="cyan", linewidths=1.1,
+                           label=f"Top-{topk}")
+                ax.legend(fontsize=8, loc="lower right")
+            ax.set_title("H&E (CZI)", fontsize=9)
+            ax.set_xlabel("x"); ax.set_ylabel("y")
+
+        for name, prob, scores, eff_coords in scored:
+            scores_norm = log_normalise(scores)
+            topk_idx    = np.argsort(scores_norm)[-topk:]
+            outcome     = _outcome_label(prob, label, threshold)
+            _scatter_panel(axes[ax_idx], eff_coords, scores_norm, topk_idx, name, prob, outcome)
+            ax_idx += 1
 
     fig.tight_layout()
     out.mkdir(parents=True, exist_ok=True)
@@ -579,6 +615,7 @@ def run_slide_default(
     threshold: float = 0.5,
     multihead_mode: str = "mean",
     show_multihead_panels: bool = True,
+    presentation_layout: bool = False,
 ) -> None:
     rec_idx = next(
         (i for i, r in enumerate(provider.records) if r.slide_id == slide_id), None
@@ -619,7 +656,7 @@ def run_slide_default(
     make_comparison_figure(
         slide_id, label, category, features, coords, results,
         topk=min(topk, len(features)), data_root=data_root, out=out,
-        threshold=threshold,
+        threshold=threshold, presentation_layout=presentation_layout,
     )
 
 
@@ -635,6 +672,7 @@ def run_slide_seed_grid(
     threshold: float = 0.5,
     multihead_mode: str = "mean",
     show_multihead_panels: bool = True,
+    presentation_layout: bool = False,
 ) -> None:
     rec_idx = next(
         (i for i, r in enumerate(provider.records) if r.slide_id == slide_id), None
@@ -705,6 +743,8 @@ def main():
     parser.add_argument("--models_file",
                         help="Optional YAML mapping of display names to output directories")
     parser.add_argument("--out",        default="outputs/attention_viz")
+    parser.add_argument("--presentation_layout", action="store_true",
+                        help="Arrange panels in a compact 2x3 presentation grid")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -731,7 +771,8 @@ def main():
     if args.slide_id:
         run_fn(args.slide_id, "single", provider, device, args.topk, data_root, out, models,
                threshold=args.threshold, multihead_mode=args.multihead_mode,
-               show_multihead_panels=not args.no_multihead_panels)
+               show_multihead_panels=not args.no_multihead_panels,
+               presentation_layout=args.presentation_layout)
     else:
         categories = select_slides(models, args.threshold, args.n_examples, args.split)
         for category in ("tp", "fp", "fn", "tn"):
@@ -742,7 +783,8 @@ def main():
             for slide_id in slide_ids:
                 run_fn(slide_id, category, provider, device, args.topk, data_root, out, models,
                        threshold=args.threshold, multihead_mode=args.multihead_mode,
-                       show_multihead_panels=not args.no_multihead_panels)
+                       show_multihead_panels=not args.no_multihead_panels,
+                       presentation_layout=args.presentation_layout)
 
 
 if __name__ == "__main__":

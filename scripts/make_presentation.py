@@ -1247,26 +1247,54 @@ section_divider(sl, 7, "Attention Visualization",
 sl = slide()
 bg(sl)
 header_bar(sl, "Representative Attention Comparison",
-           "True positive example across MeanPool, AttentionMIL, TransformerMIL, and HybridAttentionMIL")
+           "True positive example · top row: MeanPool / AttentionMIL / TransformerMIL · bottom row: Hybrid mean / head 0 / head 1")
 
 tp_path = REPO / "outputs" / "presentation_attention_cmp" / "single_SR1482_40X_HE_T372_01_compare_attention.png"
 if tp_path.exists():
     img(sl, tp_path, 0.35, 1.3, 12.63)
-    caption(sl, "Model order is fixed left-to-right: MeanPool, AttentionMIL, TransformerMIL, HybridAttentionMIL.",
+    caption(sl, "TP example. HybridAttentionMIL is split into an aggregate map plus its two learned heads on the second row.",
             0.35, 6.82, 12.63)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SLIDE 27 — Attention comparison (false positive)
+# SLIDE 27 — Attention comparison (true negative)
 # ─────────────────────────────────────────────────────────────────────────────
 sl = slide()
 bg(sl)
 header_bar(sl, "Representative Attention Comparison",
-           "False positive example across MeanPool, AttentionMIL, TransformerMIL, and HybridAttentionMIL")
+           "True negative example · top row: MeanPool / AttentionMIL / TransformerMIL · bottom row: Hybrid mean / head 0 / head 1")
+
+tn_path = REPO / "outputs" / "presentation_attention_cmp" / "single_SR1482_40X_HE_T156_01_compare_attention.png"
+if tn_path.exists():
+    img(sl, tn_path, 0.35, 1.3, 12.63)
+    caption(sl, "TN example. This keeps the same 4-model comparison, but gives the hybrid model its own second-row head breakdown.",
+            0.35, 6.82, 12.63)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SLIDE 28 — Attention comparison (false positive)
+# ─────────────────────────────────────────────────────────────────────────────
+sl = slide()
+bg(sl)
+header_bar(sl, "Representative Attention Comparison",
+           "False positive example · top row: MeanPool / AttentionMIL / TransformerMIL · bottom row: Hybrid mean / head 0 / head 1")
 
 fp_path = REPO / "outputs" / "presentation_attention_cmp" / "single_SR1482_40X_HE_T147_02_compare_attention.png"
 if fp_path.exists():
     img(sl, fp_path, 0.35, 1.3, 12.63)
-    caption(sl, "These comparisons use the rerun 4-model figure set in the requested order for direct visual comparison.",
+    caption(sl, "FP example. The layout separates the core cross-model comparison from the hybrid head-level behaviour.",
+            0.35, 6.82, 12.63)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SLIDE 29 — Attention comparison (false negative)
+# ─────────────────────────────────────────────────────────────────────────────
+sl = slide()
+bg(sl)
+header_bar(sl, "Representative Attention Comparison",
+           "False negative example · top row: MeanPool / AttentionMIL / TransformerMIL · bottom row: Hybrid mean / head 0 / head 1")
+
+fn_path = REPO / "outputs" / "presentation_attention_cmp" / "single_SR1482_40X_HE_T070_01_compare_attention.png"
+if fn_path.exists():
+    img(sl, fn_path, 0.35, 1.3, 12.63)
+    caption(sl, "FN example. Same ordering and layout, so differences are easier to compare across all four outcome types.",
             0.35, 6.82, 12.63)
 
 
