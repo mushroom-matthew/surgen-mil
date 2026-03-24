@@ -5,6 +5,12 @@ Output: surgen_mil_presentation.pptx
 """
 
 from pathlib import Path
+import os
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import pandas as pd
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
@@ -171,6 +177,70 @@ def divider_line(sl, y, l=0.35, w=12.63):
     line.line.color.rgb = TEAL
     line.line.width = Pt(1.5)
 
+def make_cohort_grouped_plot(out_path: Path):
+    raw = MULTI / "raw_cohort_runs.csv"
+    if not raw.exists():
+        return None
+    df = pd.read_csv(raw)
+    keep = [
+        "uni_mean_fair",
+        "uni_attention_fair",
+        "paper_reproduction_fair",
+        "uni_hybrid_attention_mean2",
+    ]
+    label_map = {
+        "uni_mean_fair": "MeanPool",
+        "uni_attention_fair": "AttentionMIL",
+        "paper_reproduction_fair": "TransformerMIL",
+        "uni_hybrid_attention_mean2": "HybridAttentionMIL",
+    }
+    sub = df[df["model"].isin(keep)].copy()
+    if sub.empty:
+        return None
+    agg = (
+        sub.groupby(["model", "cohort"], as_index=False)
+        .agg(mean=("cohort_auroc", "mean"), std=("cohort_auroc", "std"))
+    )
+    order = keep
+    cohorts = ["SR1482", "SR386"]
+    colors = {"SR1482": "#1f77b4", "SR386": "#ff7f0e"}
+    x = range(len(order))
+    width = 0.34
+
+    fig, ax = plt.subplots(figsize=(9, 4.6))
+    for j, cohort in enumerate(cohorts):
+        vals = []
+        errs = []
+        for model in order:
+            row = agg[(agg["model"] == model) & (agg["cohort"] == cohort)]
+            vals.append(float(row["mean"].iloc[0]))
+            errs.append(float(row["std"].iloc[0]) if not pd.isna(row["std"].iloc[0]) else 0.0)
+        xpos = [i + (j - 0.5) * width for i in x]
+        ax.bar(xpos, vals, width=width, color=colors[cohort], alpha=0.8, label=cohort)
+        ax.errorbar(xpos, vals, yerr=errs, fmt="none", ecolor="black", elinewidth=1, capsize=3)
+
+    split_df = pd.read_csv(MULTI / "summary_extended_by_split.csv")
+    split_sub = split_df[split_df["model"].isin(keep)].copy()
+    metric_col = {"SR1482": "SR1482_auroc", "SR386": "SR386_auroc"}
+    for i, model in enumerate(order):
+        for j, cohort in enumerate(cohorts):
+            vals = split_sub.loc[split_sub["model"] == model, metric_col[cohort]].tolist()
+            xpos = [i + (j - 0.5) * width] * len(vals)
+            jitter = [-0.03, 0.0, 0.03][: len(vals)]
+            ax.scatter([a + b for a, b in zip(xpos, jitter)], vals, color="black", s=18, zorder=3, alpha=0.8)
+
+    ax.set_xticks(list(x))
+    ax.set_xticklabels([label_map[m] for m in order], rotation=12, ha="right")
+    ax.set_ylabel("Cohort AUROC")
+    ax.set_title("Cohort AUROC by Model\nBars: mean across 9 runs, dots: split means")
+    ax.set_ylim(0.75, 0.98)
+    ax.grid(True, axis="y", alpha=0.25)
+    ax.legend(frameon=False, ncol=2, loc="upper left")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # SLIDE 1 — TITLE
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -178,21 +248,21 @@ sl = slide()
 bg(sl, NAVY)
 rect(sl, 0, 5.8, 13.33, 1.7, fill=TEAL)
 
-txbox(sl, "SurGen MIL", 1.0, 1.2, 11.33, 1.1,
-      font_size=52, bold=True, color=WHITE, align=PP_ALIGN.CENTER)
-txbox(sl, "Multiple Instance Learning for MSI/MMR Prediction", 1.0, 2.35, 11.33, 0.7,
-      font_size=26, bold=False, color=LIGHT, align=PP_ALIGN.CENTER)
+txbox(sl, "SurGen MIL", 0.75, 0.9, 8.5, 0.82,
+      font_size=52, bold=True, color=WHITE, align=PP_ALIGN.LEFT)
+txbox(sl, "Multiple Instance Learning for MSI/MMR Prediction", 0.75, 1.76, 8.5, 0.53,
+      font_size=26, bold=False, color=LIGHT, align=PP_ALIGN.LEFT)
 txbox(sl, "from Precomputed UNI Patch Embeddings · SurGen Colorectal Cancer Dataset",
-      1.0, 3.05, 11.33, 0.55,
-      font_size=18, bold=False, color=ACCENT, align=PP_ALIGN.CENTER)
+      0.75, 2.29, 8.5, 0.41,
+      font_size=18, bold=False, color=ACCENT, align=PP_ALIGN.LEFT)
 
-divider_line(sl, 3.8, l=3.0, w=7.33)
+divider_line(sl, 2.85, l=2.25, w=5.5)
 
-txbox(sl, "Matthew", 1.0, 4.0, 11.33, 0.5,
-      font_size=18, bold=True, color=WHITE, align=PP_ALIGN.CENTER)
-txbox(sl, "Computational Pathology · Take-Home Project · March 2026",
-      1.0, 4.5, 11.33, 0.45,
-      font_size=15, color=LIGHT, align=PP_ALIGN.CENTER)
+txbox(sl, "Matthew Getzin", 0.75, 3.0, 8.5, 0.31,
+      font_size=18, bold=True, color=WHITE, align=PP_ALIGN.LEFT)
+txbox(sl, "Computational Pathology · Take-Home Project for Pathomiq · March 2026",
+      0.75, 3.38, 8.5, 0.26,
+      font_size=15, color=LIGHT, align=PP_ALIGN.LEFT)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SLIDE 2 — OUTLINE
@@ -541,7 +611,8 @@ bullet_list(sl, [
     ("Checkpoint selection", "EMA-smoothed val AUPRC (α=0.7) — reduces noise from single-epoch evaluation"),
     ("Temperature scaling", "post-hoc calibration on validation set · minimises NLL"),
     ("Evaluation", "slide-level AUROC and AUPRC on held-out test set · case-level aggregation (max/mean/noisy_or)"),
-    ("Paper baseline", "AUROC 0.827 (different split, same architecture as TransformerMIL)"),
+    ("Paper baseline", "AUROC 0.827, but not directly comparable: different split, 200 epochs, "
+     "no early stopping / EMA checkpointing, and no random train-time bag sampling"),
 ], l=0.35, t=1.3, w=12.6, h=5.8, font_size=16)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -606,20 +677,10 @@ header_bar(sl, "ROC and Precision-Recall Curves",
 
 roc_path = OUT / "roc_pr.png"
 if roc_path.exists():
-    img(sl, roc_path, 0.35, 1.25, 8.5)
-    caption(sl, "Left: ROC curves — all three models shown per seed. "
-            "Right: PR curves — AUPRC reflects class imbalance more faithfully.",
-            0.35, 6.85, 8.5)
-
-txbox(sl, "Takeaways", 9.15, 1.35, 3.9, 0.4,
-      font_size=16, bold=True, color=NAVY)
-bullet_list(sl, [
-    "MeanPool (teal): tight cluster of curves — highly reproducible",
-    "AttentionMIL (blue): wider spread — seed-sensitive convergence",
-    "TransformerMIL (purple): large spread, some seeds below baseline",
-    "All models exceed paper baseline in mean AUROC",
-    "AUPRC variance tells a similar story: mean pooling surprisingly competitive",
-], l=9.15, t=1.82, w=3.9, h=4.8, font_size=14, indent_char="▸ ")
+    img(sl, roc_path, 0.35, 1.25, 12.6)
+    caption(sl, "Left: ROC curves. Right: PR curves. Curves are seed-averaged test probabilities "
+            "per model on the fixed fair-comparison split.",
+            0.35, 6.82, 12.6)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SLIDE 13 — Confusion matrices
@@ -627,14 +688,23 @@ bullet_list(sl, [
 sl = slide()
 bg(sl)
 header_bar(sl, "Confusion Matrices — Fair Comparison",
-           "Representative seed per model · threshold = Youden J from validation set")
+           "Seed-averaged test probabilities · Youden J threshold from averaged validation predictions")
 
-cm_path = FIG / "fair_comparison_confusion_matrices.png"
+cm_path = OUT / "confusion_matrices.png"
 if cm_path.exists():
-    img(sl, cm_path, 0.35, 1.25, 12.6)
-    caption(sl, "MeanPool (left) · AttentionMIL (centre) · TransformerMIL (right). "
-            "Class imbalance is visible — positive class (MSI-H/dMMR) is the minority.",
-            0.35, 6.85, 12.6)
+    img(sl, cm_path, 0.35, 1.25, 8.4)
+    caption(sl, "Top row: slide-level. Bottom row: case-level mean aggregation. "
+            "Each panel uses the threshold fit on averaged validation probabilities for that model.",
+            0.35, 6.82, 8.4)
+
+txbox(sl, "What is averaged?", 9.0, 1.35, 3.7, 0.35,
+      font_size=15, bold=True, color=NAVY)
+bullet_list(sl, [
+    "Test probabilities are averaged across the 3 seeds for each slide",
+    "Validation probabilities are averaged across the 3 seeds before fitting Youden J",
+    "So the threshold is not a per-seed threshold; it is fit on the averaged validation prediction",
+    "Positive-class scarcity is still visible: most operating points trade recall against a large negative pool",
+], l=9.0, t=1.78, w=3.7, h=4.9, font_size=13, indent_char="▸ ")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SLIDE 14 — Training curves + metric summary
@@ -647,11 +717,20 @@ header_bar(sl, "Training Dynamics & Metric Summary",
 tc_path = OUT / "training_curves.png"
 ms_path = OUT / "metric_summary.png"
 if tc_path.exists():
-    img(sl, tc_path, 0.35, 1.25, 7.9)
-    caption(sl, "Training curves (all seeds)", 0.35, 6.8, 7.9)
+    img(sl, tc_path, 0.35, 1.25, 7.15)
+    caption(sl, "Training curves: rows = models, columns = val AUROC / val AUPRC / train loss",
+            0.35, 6.82, 7.15)
 if ms_path.exists():
-    img(sl, ms_path, 8.55, 1.25, 4.5)
-    caption(sl, "Metric summary", 8.55, 6.8, 4.5)
+    img(sl, ms_path, 7.85, 1.25, 5.15)
+    caption(sl, "Metric summary across seeds", 7.85, 3.0, 5.15)
+
+txbox(sl, "Takeaways", 7.85, 3.35, 5.15, 0.35,
+      font_size=15, bold=True, color=NAVY)
+bullet_list(sl, [
+    "Training curves: MeanPool is the tightest across seeds; AttentionMIL is noisier; TransformerMIL is the least stable",
+    "Bar summary: MeanPool wins on stability, AttentionMIL edges the mean AUROC, and TransformerMIL loses on both mean and variance",
+    "This is the cleanest place to discuss variance because both the per-seed curves and summary bars are visible together",
+], l=7.85, t=3.75, w=5.15, h=2.7, font_size=13, indent_char="▸ ")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SLIDE 15 — Interpretation
@@ -672,7 +751,7 @@ findings = [
      "AttentionMIL marginally outperforms MeanPool in mean AUROC "
      "but with 4× higher variance. "
      "TransformerMIL — with 17× more parameters — performs worst. "
-     "Weak supervision penalizes overparameterisation.",
+     "Weak supervision and dataset size penalize overparameterization.",
      NAVY),
     ("Attention adds value at a cost",
      "Attention MIL can identify diagnostically relevant patches. "
@@ -756,7 +835,7 @@ txbox(sl, "Interpretation", 0.35, 4.3, 12.6, 0.38, font_size=15, bold=True, colo
 bullet_list(sl, [
     ("Unweighted BCE is not worse:",
      "AUROC 0.862 ± 0.003 vs 0.860 ± 0.005 — class weighting has minimal impact at this imbalance ratio. "
-     "AUPRC is actually slightly higher, suggesting fewer false negatives on the positive class."),
+     "AUPRC is slightly higher, but this slide alone does not support a confusion-matrix claim about error type."),
     ("Instance mean matches bag mean:",
      "Classifying each patch independently then pooling probabilities (instance mean) "
      "yields the same result as pooling embeddings first — further evidence the embeddings are "
@@ -771,7 +850,7 @@ bullet_list(sl, [
 sl = slide()
 bg(sl)
 header_bar(sl, "Appendix B — Focal Loss vs Weighted BCE for AttentionMIL",
-           "Does down-weighting easy negatives improve sensitivity on the minority class?")
+           "Use the figures to talk about score distributions and calibration, not just the metric table")
 
 ablation_table(
     sl,
@@ -784,28 +863,24 @@ ablation_table(
     [RGBColor(0xE8,0xF4,0xF8), RGBColor(0xF0,0xF4,0xFB)],
     col_ws=[2.6, 2.5, 2.4, 2.4, 1.95],
     t_top=1.3,
-    note="Focal loss trades ~0.5pp AUROC for ~4pp AUPRC gain — meaningful if sensitivity on MSI-H is the clinical priority.",
+    note="Focal loss trades ~0.5pp AUROC for ~4pp AUPRC gain. The plots below are better evidence for how the score behaviour changes.",
 )
 
-divider_line(sl, 3.55)
+cal_path = OUT / "calibration.png"
+err_path = OUT / "error_distributions.png"
+if cal_path.exists():
+    img(sl, cal_path, 0.35, 3.65, 4.15)
+    caption(sl, "Calibration after temperature scaling", 0.35, 6.82, 4.15)
+if err_path.exists():
+    img(sl, err_path, 4.8, 3.65, 5.1)
+    caption(sl, "Seed-averaged score distributions and thresholds", 4.8, 6.82, 5.1)
 
-# Two-column interpretation
-txbox(sl, "AUROC vs AUPRC trade-off", 0.35, 3.65, 6.1, 0.38, font_size=15, bold=True, color=NAVY)
+txbox(sl, "What the figures support", 10.15, 3.65, 2.8, 0.35, font_size=15, bold=True, color=NAVY)
 bullet_list(sl, [
-    "AUROC measures overall rank discrimination — focal slightly lower (0.864 vs 0.869)",
-    "AUPRC is precision-recall area — more sensitive to performance on the minority class",
-    "Focal loss forces the model to prioritize hard, ambiguous patches — gains precision on MSI-H",
-    "Higher AUPRC std with focal (±0.066 vs ±0.052) — less stable optimization",
-], l=0.35, t=4.08, w=6.1, h=3.2, font_size=14, indent_char="▸ ")
-
-txbox(sl, "When to prefer focal loss", 6.7, 3.65, 6.1, 0.38, font_size=15, bold=True, color=NAVY)
-bullet_list(sl, [
-    "Clinical scenario favours recall (minimize missed MSI-H cases)",
-    "AUPRC is reported metric rather than AUROC",
-    "Willing to accept slightly higher variance across seeds",
-    "Calibration: focal models tend to produce softer probabilities, "
-     "reducing the need for post-hoc temperature scaling",
-], l=6.7, t=4.08, w=6.1, h=3.2, font_size=14, indent_char="▸ ")
+    "Focal loss changes score shape, not just one summary metric",
+    "AUPRC rises, but variance also rises: ±0.066 vs ±0.052",
+    "Use this framing for a recall-oriented use case, not a blanket claim about calibration",
+], l=10.15, t=4.05, w=2.8, h=2.7, font_size=12, indent_char="▸ ")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SLIDE 18 — Appendix C: Top-k sparse evidence
@@ -815,7 +890,7 @@ bg(sl)
 header_bar(sl, "Appendix C — Sparse Evidence: Top-k = 16",
            "Select the 16 highest-attended patches at test time — does focus help?")
 
-# Table on the left
+# Top row: table + figure
 ablation_table(
     sl,
     "Results (mean ± std, 3 seeds)",
@@ -829,21 +904,20 @@ ablation_table(
     t_top=1.3,
 )
 
-# ROC/PR image right
 c_roc = FIG / "appendix_c_roc_pr_curves.png"
 if c_roc.exists():
-    img(sl, c_roc, 6.55, 1.3, 6.45)
-    caption(sl, "ROC and PR curves · full-bag vs top-k=16", 6.55, 6.82, 6.45)
+    img(sl, c_roc, 6.85, 1.3, 6.0)
+    caption(sl, "ROC / PR curves · full-bag vs top-k=16", 6.85, 4.05, 6.0)
 
-divider_line(sl, 4.15)
+divider_line(sl, 4.35)
 
-txbox(sl, "Interpretation", 0.35, 4.25, 6.0, 0.38, font_size=15, bold=True, color=NAVY)
+txbox(sl, "Interpretation", 0.35, 4.45, 12.6, 0.38, font_size=15, bold=True, color=NAVY)
 bullet_list(sl, [
     "AUROC drops −1.6pp: forcing focus on 16 patches discards contextual signal spread across the slide",
     "AUPRC gains +7.4pp: model becomes more precise on MSI-H — but AUPRC std explodes (±0.140 vs ±0.052)",
     "Variance increase suggests top-k is fragile: whether the right 16 patches are selected depends heavily on initialization",
     "Clinical use case: when a concise heatmap with few highlighted regions is needed for pathologist review",
-], l=0.35, t=4.68, w=6.0, h=2.6, font_size=13, indent_char="▸ ")
+], l=0.35, t=4.88, w=12.6, h=1.95, font_size=13, indent_char="▸ ")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SLIDE 19 — Appendix D: Sampler strategies
@@ -853,44 +927,62 @@ bg(sl)
 header_bar(sl, "Appendix D — Train-Time Sampler Strategies",
            "Does the patch sampling strategy during training affect the learned aggregator? · full-bag eval")
 
-# Full-width table
-ablation_table(
-    sl,
-    "Results (mean ± std, 3 seeds) — full-bag evaluation for all",
-    ["Model", "Train Sampler", "AUROC", "AUPRC", "AUPRC std"],
+def mini_table(sl, x0, title, rows, row_colors):
+    txbox(sl, title, x0, 1.3, 5.9, 0.32, font_size=15, bold=True,
+          color=TEAL if "MeanPool" in title else NAVY)
+    headers = ["Sampler", "AUROC", "AUPRC", "std"]
+    widths = [2.2, 1.35, 1.35, 0.8]
+    xs = [x0]
+    for w in widths[:-1]:
+        xs.append(xs[-1] + w + 0.05)
+    y = 1.68
+    for h, x, w in zip(headers, xs, widths):
+        rect(sl, x, y, w, 0.36, fill=NAVY)
+        txbox(sl, h, x + 0.04, y + 0.04, w - 0.08, 0.28,
+              font_size=12, bold=True, color=WHITE, align=PP_ALIGN.CENTER)
+    for i, (row, rc) in enumerate(zip(rows, row_colors)):
+        ry = y + 0.39 + i * 0.46
+        for cell, x, w in zip(row, xs, widths):
+            rect(sl, x, ry, w, 0.42, fill=rc,
+                 line_color=RGBColor(0xCC,0xCC,0xCC), line_width=Pt(0.4))
+            txbox(sl, cell, x + 0.04, ry + 0.05, w - 0.08, 0.3,
+                  font_size=11, color=DGRAY,
+                  align=PP_ALIGN.CENTER if x != xs[0] else PP_ALIGN.LEFT)
+
+mini_table(
+    sl, 0.35, "MeanPool (mean ± std, 3 seeds)",
     [
-        ["MeanPool",     "Random (baseline)", "0.860 ± 0.005", "0.447 ± 0.019", "±0.019"],
-        ["MeanPool",     "Spatial grid",      "0.859 ± 0.007", "0.447 ± 0.015", "±0.015"],
-        ["MeanPool",     "Feature-diverse",   "0.852 ± 0.005", "0.358 ± 0.035", "±0.035"],
-        ["AttentionMIL", "Random (baseline)", "0.869 ± 0.020", "0.381 ± 0.052", "±0.052"],
-        ["AttentionMIL", "Spatial grid",      "0.861 ± 0.031", "0.404 ± 0.058", "±0.058"],
-        ["AttentionMIL", "Feature-diverse",   "0.879 ± 0.006", "0.407 ± 0.058", "±0.058"],
+        ["Random",          "0.860 ± 0.005", "0.447 ± 0.019", "±0.019"],
+        ["Spatial grid",    "0.859 ± 0.007", "0.447 ± 0.015", "±0.015"],
+        ["Feature-diverse", "0.852 ± 0.005", "0.358 ± 0.035", "±0.035"],
     ],
-    [
-        RGBColor(0xEE,0xF8,0xEE), RGBColor(0xF5,0xF5,0xF5), RGBColor(0xF5,0xF5,0xF5),
-        RGBColor(0xE8,0xF4,0xF8), RGBColor(0xF5,0xF5,0xF5), RGBColor(0xD4,0xED,0xDA),
-    ],
-    col_ws=[2.7, 2.7, 2.1, 2.1, 1.9],
-    t_top=1.3,
-    note="Green row = best per model. MeanPool is sampler-invariant on AUROC; feature-diverse hurts its AUPRC. "
-         "AttentionMIL gains +1pp AUROC and halves variance with feature-diverse sampling.",
-    highlight_row=None,
+    [RGBColor(0xEE,0xF8,0xEE), RGBColor(0xF5,0xF5,0xF5), RGBColor(0xF5,0xF5,0xF5)],
 )
 
-divider_line(sl, 5.05)
+mini_table(
+    sl, 6.85, "AttentionMIL (mean ± std, 3 seeds)",
+    [
+        ["Random",          "0.869 ± 0.020", "0.381 ± 0.052", "±0.052"],
+        ["Spatial grid",    "0.861 ± 0.031", "0.404 ± 0.058", "±0.058"],
+        ["Feature-diverse", "0.879 ± 0.006", "0.407 ± 0.058", "±0.058"],
+    ],
+    [RGBColor(0xE8,0xF4,0xF8), RGBColor(0xF5,0xF5,0xF5), RGBColor(0xD4,0xED,0xDA)],
+)
 
-txbox(sl, "MeanPool", 0.35, 5.15, 6.0, 0.35, font_size=15, bold=True, color=TEAL)
+divider_line(sl, 4.1)
+
+txbox(sl, "MeanPool", 0.35, 4.2, 5.9, 0.35, font_size=15, bold=True, color=TEAL)
 bullet_list(sl, [
     "AUROC is stable across all three samplers (within 0.008) — mean pool is permutation-invariant by design",
     "Feature-diverse drops AUPRC to 0.358: diverse sampling may under-represent the rare positive patches that drive recall",
-], l=0.35, t=5.53, w=6.0, h=1.75, font_size=13, indent_char="▸ ")
+], l=0.35, t=4.58, w=5.9, h=2.2, font_size=13, indent_char="▸ ")
 
-txbox(sl, "AttentionMIL", 6.7, 5.15, 6.0, 0.35, font_size=15, bold=True, color=NAVY)
+txbox(sl, "AttentionMIL", 6.7, 4.2, 6.0, 0.35, font_size=15, bold=True, color=NAVY)
 bullet_list(sl, [
     "Feature-diverse: AUROC 0.879 ± 0.006 — best AUROC, and variance collapses from ±0.020 to ±0.006",
     "Spatial grid: intermediate — reduces variance somewhat but not as cleanly",
     "Explanation: diverse training bags force attention to generalize across feature types rather than latching onto an easy, repeating pattern",
-], l=6.7, t=5.53, w=6.0, h=1.75, font_size=13, indent_char="▸ ")
+], l=6.7, t=4.58, w=6.0, h=2.2, font_size=13, indent_char="▸ ")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ── SECTION 6 ─────────────────────────────────────────────────────────────────
@@ -898,129 +990,55 @@ bullet_list(sl, [
 
 sl = slide()
 section_divider(sl, 6, "Attention Visualization",
-                "Where is the model looking? · Multi-model seed grids from best split (split_1)")
-
-# Seed-grid images are ~0.28–0.37 aspect ratio (tall and narrow).
-# Each image shows rows=models (5), cols=seeds (3) for a single slide.
-# Models: MeanPool, AttentionMIL, HybridAttentionMIL, Hybrid+coords, TransformerMIL
-# Display as a tall column on the left with annotation text on the right.
-# At 2.2" wide: height = 2.2 / 0.365 ≈ 6.0" — fits in content area.
-_SG_W   = 2.2    # seed-grid image width
-_SG_H   = 6.05   # seed-grid image height
-_SG_T   = 1.28   # top of image
-_ANN_L  = 2.75   # annotation text left edge
-_ANN_W  = 10.3   # annotation text width
-
-ATTN_SPLIT1 = REPO / "outputs" / "multisplit" / "attention_viz" / "split_1"
+                "Representative success and failure cases from the core fair-comparison models")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SLIDE: TP seed-grid — correct MSI-H identification
+# SLIDE: Representative successes
 # ─────────────────────────────────────────────────────────────────────────────
 sl = slide()
 bg(sl)
-header_bar(sl, "Attention Maps — True Positive  (split_1 · SR1482 T372)",
-           "Seed grid: rows = 5 models, cols = 3 seeds · AttentionMIL family · MSI-H correctly identified")
+header_bar(sl, "Attention Maps — Representative Successes",
+           "Left to right in each panel: H&E, experimental attention, MeanPool IG, AttentionMIL, TransformerMIL IG")
 
-tp_sg = ATTN_SPLIT1 / "tp_SR1482_40X_HE_T372_01_seed_grid.png"
-if tp_sg.exists():
-    img(sl, tp_sg, 0.35, _SG_T, _SG_W, _SG_H)
+tp_fig = FIG / "attn_tp_SR386_T402.png"
+tn_fig = FIG / "attn_tn_SR386_T129.png"
+if tp_fig.exists():
+    img(sl, tp_fig, 0.35, 1.25, 12.6)
+    caption(sl, "True positive: all models confidently identify MSI-H", 0.35, 3.55, 12.6)
+if tn_fig.exists():
+    img(sl, tn_fig, 0.35, 3.95, 12.6)
+    caption(sl, "True negative: all models correctly suppress the positive class", 0.35, 6.32, 12.6)
 
-txbox(sl, "How to read this grid", _ANN_L, 1.28, _ANN_W, 0.38,
-      font_size=15, bold=True, color=NAVY)
-txbox(sl, "Each cell shows the attention heatmap for one model (row) × one training seed (col). "
-      "Yellow = high attention, dark blue = low. The slide is the same across all panels — "
-      "only the learned attention weights change.",
-      _ANN_L, 1.68, _ANN_W, 0.7, font_size=14, color=DGRAY)
-
-divider_line(sl, 2.5, l=_ANN_L, w=_ANN_W)
-
-rows_desc = [
-    ("Row 1 — MeanPool:", "No attention mechanism — panel shows integrated gradients as proxy. "
-     "Weights are broadly distributed and seed-stable."),
-    ("Row 2 — AttentionMIL:", "Focal peaks visible — model learns to concentrate on specific patches. "
-     "Consistent across seeds: attention converges to similar regions."),
-    ("Row 3 — HybridAttentionMIL ★:", "Best multisplit AUROC (0.935 on split_1). "
-     "Strong focal signal, lowest seed-to-seed variance across the row — "
-     "mean pool anchor stabilizes attention learning."),
-    ("Row 4 — Hybrid + Coords:", "Similar to hybrid without coords — spatial encoding adds little here."),
-    ("Row 5 — TransformerMIL:", "Diffuse or noisy patterns — consistent with its high AUROC variance "
-     "and tendency to overfit at this dataset scale."),
-]
-for i, (label, detail) in enumerate(rows_desc):
-    t = 2.62 + i * 0.74
-    txbox(sl, label, _ANN_L, t, _ANN_W, 0.3,
-          font_size=13, bold=True,
-          color=GREEN if "★" in label else NAVY)
-    txbox(sl, detail, _ANN_L, t + 0.28, _ANN_W, 0.42,
-          font_size=13, color=DGRAY)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SLIDE: FN seed-grid — missed MSI-H
-# ─────────────────────────────────────────────────────────────────────────────
-sl = slide()
-bg(sl)
-header_bar(sl, "Attention Maps — False Negative  (split_1 · SR1482 T070)",
-           "Seed grid: rows = 5 models, cols = 3 seeds · MSI-H slide — all models predict pMMR")
-
-fn_sg = ATTN_SPLIT1 / "fn_SR1482_40X_HE_T070_01_seed_grid.png"
-if fn_sg.exists():
-    img(sl, fn_sg, 0.35, _SG_T, _SG_W, _SG_H)
-
-txbox(sl, "What is the model missing?", _ANN_L, 1.28, _ANN_W, 0.38,
-      font_size=15, bold=True, color=RED)
-txbox(sl, "Despite the true MSI-H label, all 5 models assign diffuse, low-magnitude attention "
-      "across the slide. This is a consistent failure — not a seed-dependent fluke.",
-      _ANN_L, 1.68, _ANN_W, 0.65, font_size=14, color=DGRAY)
-
-divider_line(sl, 2.45, l=_ANN_L, w=_ANN_W)
-
-txbox(sl, "Possible explanations", _ANN_L, 2.55, _ANN_W, 0.35,
-      font_size=15, bold=True, color=NAVY)
+txbox(sl, "Takeaways", 0.35, 6.6, 12.6, 0.3, font_size=15, bold=True, color=NAVY)
 bullet_list(sl, [
-    ("Atypical morphology:", "Some MSI-H cases lack the canonical TIL-rich, mucinous appearance. "
-     "The UNI embedding space may not place these patches near typical MSI-H signals."),
-    ("Sparse diagnostic signal:", "If only a small number of patches carry the MSI-H signature, "
-     "attention scores remain low even for the right regions — a bag-size / dilution problem."),
-    ("Label source uncertainty:", "SR1482 reconciled from IHC + PCR; occasional edge cases may have "
-     "weakly concordant evidence that reduces effective signal."),
-    ("Implication for hybrid multi-head:", "Separate heads may decompose ambiguous cases differently — "
-     "one head could specialise on TILs while another responds to mucinous architecture, "
-     "potentially capturing cases that confuse a single attention scorer."),
-], l=_ANN_L, t=2.95, w=_ANN_W, h=4.2, font_size=13)
+    "These examples only use models already introduced in the fair comparison; hybrid/spatial variants appear later in section 7",
+    "When the case is easy, the maps are broadly consistent across methods: distributed positive evidence in the TP, uniformly low attribution in the TN",
+    "MeanPool integrated gradients often track the learned attention maps, which argues the signal is not purely an attention artifact",
+], l=0.35, t=6.92, w=12.6, h=0.45, font_size=12, indent_char="▸ ")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SLIDE: FP seed-grid — pMMR predicted as MSI-H
+# SLIDE: Representative failures
 # ─────────────────────────────────────────────────────────────────────────────
 sl = slide()
 bg(sl)
-header_bar(sl, "Attention Maps — False Positive  (split_1 · SR1482 T147)",
-           "Seed grid: rows = 5 models, cols = 3 seeds · pMMR slide — models incorrectly predict MSI-H")
+header_bar(sl, "Attention Maps — Representative Failures",
+           "Same left-to-right order: H&E, experimental attention, MeanPool IG, AttentionMIL, TransformerMIL IG")
 
-fp_sg = ATTN_SPLIT1 / "fp_SR1482_40X_HE_T147_02_seed_grid.png"
-if fp_sg.exists():
-    img(sl, fp_sg, 0.35, _SG_T, _SG_W, _SG_H)
+fp_fig = FIG / "attn_fp_SR1482_T061.png"
+fn_fig = FIG / "attn_fn_SR386_T436.png"
+if fp_fig.exists():
+    img(sl, fp_fig, 0.35, 1.25, 12.6)
+    caption(sl, "False positive: all models are confidently wrong on the same slide", 0.35, 3.55, 12.6)
+if fn_fig.exists():
+    img(sl, fn_fig, 0.35, 3.95, 12.6)
+    caption(sl, "False negative: some attention signal is present, but the fair-comparison models do not recover it reliably", 0.35, 6.32, 12.6)
 
-txbox(sl, "Where is the model being misled?", _ANN_L, 1.28, _ANN_W, 0.38,
-      font_size=15, bold=True, color=RED)
-txbox(sl, "High-attention patches are visible and focal — the model is not uncertain, "
-      "it is confidently wrong. Something in this slide strongly resembles MSI-H morphology.",
-      _ANN_L, 1.68, _ANN_W, 0.65, font_size=14, color=DGRAY)
-
-divider_line(sl, 2.45, l=_ANN_L, w=_ANN_W)
-
-txbox(sl, "Possible causes of false positives", _ANN_L, 2.55, _ANN_W, 0.35,
-      font_size=15, bold=True, color=NAVY)
+txbox(sl, "Takeaways", 0.35, 6.6, 12.6, 0.3, font_size=15, bold=True, color=NAVY)
 bullet_list(sl, [
-    ("Morphological mimics:", "Dense TIL infiltrates can appear in pMMR tumours with "
-     "high mutational burden or viral aetiology. The model has no access to genomics."),
-    ("Mucinous / signet-ring features:", "Occasional pMMR cases with mucinous change "
-     "may share embedding space with dMMR cases that commonly show mucinous architecture."),
-    ("Consistency across seeds and models:", "If all rows show the same focal high-attention "
-     "region, this is not an optimization artifact — it is a genuine feature of the slide "
-     "that the UNI embedding space associates with MSI-H."),
-    ("Clinical implication:", "These cases merit pathologist review; the model's attention map "
-     "points to specific regions that warrant a second look or supplementary IHC."),
-], l=_ANN_L, t=2.95, w=_ANN_W, h=4.0, font_size=13)
+    "The false positive is a systematic morphology-mimic error, not a one-seed anomaly",
+    "The false negative shows that signal can be present yet unstable under weak supervision; attention-based aggregation sometimes recovers it, but not reliably enough",
+    "The failure story motivates section 7: improve stability first, then add architectural complexity",
+], l=0.35, t=6.92, w=12.6, h=0.45, font_size=12, indent_char="▸ ")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ── SECTION 7 ─────────────────────────────────────────────────────────────────
@@ -1133,37 +1151,37 @@ for i, (row, rc) in enumerate(zip(ms_rows, row_bgs)):
 sl = slide()
 bg(sl)
 header_bar(sl, "The Winner: HybridAttentionMIL",
-           "Combining mean pooling with learned attention heads — AUROC 0.903 ± 0.035")
+           "Best overall multisplit result: AUPRC 0.591 ± 0.058, AUROC 0.903 ± 0.035")
 
 txbox(sl, "Architecture", 0.35, 1.35, 5.9, 0.38,
       font_size=16, bold=True, color=NAVY)
 bullet_list(sl, [
-    "2 independent attention heads — each learns a different scoring function",
+    "This is the direct multi-head extension of AttentionMIL: 2 learned attention heads instead of 1",
     "Per-head softmax → weighted sum → 1024-dim context vector per head",
     "Mean pool of full bag → 1024-dim global summary",
     "Concatenate: [head1 | head2 | mean] → 3×1024 = 3072-dim",
-    "Classifier MLP: 3072 → 1 logit",
-], l=0.35, t=1.82, w=5.9, h=3.2, font_size=15, indent_char="▸ ")
+    "Params: 918,403 total vs 393,986 for single-head AttentionMIL",
+    "Most of the increase is explicit: the classifier input grows from 1024 to 3072, "
+     "adding 524,288 weights before the final head",
+], l=0.35, t=1.82, w=5.9, h=3.6, font_size=14, indent_char="▸ ")
 
-txbox(sl, "Why it works", 0.35, 5.1, 5.9, 0.38,
+txbox(sl, "Open design questions", 0.35, 5.1, 5.9, 0.38,
       font_size=16, bold=True, color=NAVY)
 bullet_list(sl, [
-    "Mean pool anchors the representation — prevents attention collapse",
-    "Two heads can specialise for different tissue phenotypes",
-    "More stable than pure attention: mean pool provides a reliable gradient signal",
-], l=0.35, t=5.55, w=5.9, h=1.7, font_size=15, indent_char="▸ ")
+    "How many heads are enough for CRC morphology: 2 is a strong start, but the clinical / embedding question is whether the task wants ~2, ~4, or more distinct tissue subtypes",
+    "Exploration route: estimate natural embedding clusters, then ask whether heads align with recognisable tissue / morphology groups",
+    "Training route: test diversity penalties, diversity-aware initialisation, and whether heads collapse without explicit pressure to separate",
+    "Once head count is fixed, bag-level augmentation may matter more because it could improve coverage of rare morphologies seen by each head",
+], l=0.35, t=5.55, w=5.9, h=1.55, font_size=14, indent_char="▸ ")
 
 txbox(sl, "Multisplit results", 6.6, 1.35, 6.38, 0.38,
       font_size=16, bold=True, color=GREEN)
 bullet_list(sl, [
-    ("AUROC:", "0.903 ± 0.035 — best across all 9 models"),
-    ("AUPRC:", "0.591 ± 0.058 — substantially higher than any single-head model"),
-    ("Variance:", "±0.035 is comparable to plain AttentionMIL (±0.032) despite higher "
-     "capacity — mean pool provides a stabilising prior"),
-    ("vs. AttentionMIL:", "AUROC +0.003, AUPRC +0.059 — consistent gains, "
-     "especially in precision on the positive class"),
-    ("vs. MeanPool:", "AUROC +0.026, AUPRC +0.096 — meaningful improvement "
-     "while retaining interpretability via attention maps"),
+    ("AUPRC:", "0.591 ± 0.058 — best overall and the metric to emphasise under class imbalance"),
+    ("AUROC:", "0.903 ± 0.035 — also best overall, so the winner does not depend on the metric"),
+    ("AUPRC variance:", "±0.058 vs ±0.128 for plain AttentionMIL — the hybrid is not just better on average, it is markedly more stable on the positive-class metric"),
+    ("vs. AttentionMIL:", "AUPRC +0.059, AUROC +0.003, with much tighter AUPRC spread after adding a second head plus the mean branch"),
+    ("Interpretation:", "Multiple heads are helping, but the next question is whether they are learning genuinely different morphologies or just a better optimization path"),
 ], l=6.6, t=1.82, w=6.38, h=5.5, font_size=15)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1234,16 +1252,28 @@ bullet_list(sl, [
 sl = slide()
 bg(sl)
 header_bar(sl, "Cohort-Stratified Analysis",
-           "SR1482 and SR386 show different difficulty profiles")
+           "4-model view: cohorts shown side by side for each model")
 
-ml_c = MULTI / "multisplit_cohort_lines.png"
-ms_c = MULTI / "multisplit_cohort_strips.png"
-if ml_c.exists():
-    img(sl, ml_c, 0.35, 1.3, 6.35)
-    caption(sl, "Cohort-stratified AUROC by split (lines)", 0.35, 6.82, 6.35)
-if ms_c.exists():
-    img(sl, ms_c, 6.9, 1.3, 6.1)
-    caption(sl, "Cohort-stratified strip plot", 6.9, 6.82, 6.1)
+cohort_plot = make_cohort_grouped_plot(MULTI / "cohort_grouped_4models.png")
+if cohort_plot and Path(cohort_plot).exists():
+    img(sl, cohort_plot, 0.35, 1.3, 8.2)
+    caption(sl, "Bars: mean cohort AUROC across 9 runs. Dots: split-level means.",
+            0.35, 6.82, 8.2)
+
+txbox(sl, "Takeaways", 8.85, 1.35, 4.1, 0.35, font_size=16, bold=True, color=NAVY)
+bullet_list(sl, [
+    "The combined training scheme is fairly stable across cohorts for all 4 main models",
+    "That is a real improvement over the earlier leaked setting, where cohort behaviour was much less trustworthy",
+    "HybridAttentionMIL remains strongest overall without collapsing on one cohort to win the other",
+    "The remaining cohort gap looks like ordinary dataset difficulty, not obvious evidence of split leakage",
+], l=8.85, t=1.8, w=4.1, h=3.2, font_size=14, indent_char="▸ ")
+
+txbox(sl, "Why this matters", 8.85, 5.2, 4.1, 0.35, font_size=16, bold=True, color=NAVY)
+bullet_list(sl, [
+    "We are training one combined model, not cohort-specific models",
+    "Stable side-by-side cohort performance suggests the label reconciliation and case-grouping fixes are doing their job",
+    "The right next step is external generalisation, not retreating to cohort-specific tuning too early",
+], l=8.85, t=5.62, w=4.1, h=1.55, font_size=13, indent_char="▸ ")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
