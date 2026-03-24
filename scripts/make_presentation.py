@@ -292,13 +292,15 @@ sections = [
          "Case-grouped splits, SR1482 label reconciliation, cohort effects"),
     ("4", "The Fair Comparison",
          "MeanPool vs AttentionMIL vs TransformerMIL (paper reproduction)"),
-    ("5", "Ablation Studies",
+    ("5", "Fair Comparison Seed Stability",
+         "Original fair-comparison seed grids: outcome-level attention consistency"),
+    ("6", "Ablation Studies",
          "Loss functions, sparse evidence, sampler strategies"),
-    ("6", "Multi-Split Stability & Extended Models",
+    ("7", "Multi-Split Stability & Extended Models",
          "9-model comparison · hybrid attention wins · spatial coordinate effects"),
-    ("7", "Attention Visualization",
+    ("8", "Attention Visualization",
          "4-model comparisons after multisplit: MeanPool, AttentionMIL, TransformerMIL, HybridAttentionMIL"),
-    ("8", "Summary & Future Directions",
+    ("9", "Summary & Future Directions",
          "Key findings and what's next"),
 ]
 
@@ -788,7 +790,49 @@ txbox(sl, "→ Next: ablations to probe each of these hypotheses systematically.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 sl = slide()
-section_divider(sl, 5, "Ablation Studies",
+section_divider(sl, 5, "Fair Comparison Seed Stability",
+                "Original fair-comparison seed-grid attention maps")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SLIDE 16 — Seed grid successes
+# ─────────────────────────────────────────────────────────────────────────────
+sl = slide()
+bg(sl)
+header_bar(sl, "Seed Grid Attention Maps — Representative Successes",
+           "Rows = models, columns = seeds from the original fair comparison")
+
+sg_tp = REPO / "outputs" / "attention_viz" / "seed_grid" / "tp_SR386_40X_HE_T231_01_seed_grid.png"
+sg_tn = REPO / "outputs" / "attention_viz" / "seed_grid" / "tn_SR386_40X_HE_T129_01_seed_grid.png"
+if sg_tp.exists():
+    img(sl, sg_tp, 0.35, 1.22, 6.1)
+    caption(sl, "True positive: consistent high-confidence localization across seeds.", 0.35, 6.72, 6.1)
+if sg_tn.exists():
+    img(sl, sg_tn, 6.88, 1.22, 6.1)
+    caption(sl, "True negative: stable suppression of the positive class across seeds.", 6.88, 6.72, 6.1)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SLIDE 17 — Seed grid failures
+# ─────────────────────────────────────────────────────────────────────────────
+sl = slide()
+bg(sl)
+header_bar(sl, "Seed Grid Attention Maps — Representative Failure Modes",
+           "Original fair-comparison seed grids show which errors are systematic versus seed-sensitive")
+
+sg_fp = REPO / "outputs" / "attention_viz" / "seed_grid" / "fp_SR1482_40X_HE_T325_01_seed_grid.png"
+sg_fn = REPO / "outputs" / "attention_viz" / "seed_grid" / "fn_SR386_40X_HE_T436_01_seed_grid.png"
+if sg_fp.exists():
+    img(sl, sg_fp, 0.35, 1.22, 6.1)
+    caption(sl, "False positive: morphology-mimic error persists across multiple seeds.", 0.35, 6.72, 6.1)
+if sg_fn.exists():
+    img(sl, sg_fn, 6.88, 1.22, 6.1)
+    caption(sl, "False negative: weak supervision leaves recovery of rare positive evidence unstable.", 6.88, 6.72, 6.1)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ── SECTION 6 ─────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+sl = slide()
+section_divider(sl, 6, "Ablation Studies",
                 "Appendices A – D: loss, sparse evidence, samplers")
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1002,7 +1046,7 @@ bullet_list(sl, [
 # ═══════════════════════════════════════════════════════════════════════════════
 
 sl = slide()
-section_divider(sl, 6, "Multi-Split Stability & Extended Models",
+section_divider(sl, 7, "Multi-Split Stability & Extended Models",
                 "3 splits × 3 seeds · hybrid attention · spatial variants")
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1238,7 +1282,7 @@ bullet_list(sl, [
 # ═══════════════════════════════════════════════════════════════════════════════
 
 sl = slide()
-section_divider(sl, 7, "Attention Visualization",
+section_divider(sl, 8, "Attention Visualization",
                 "4-model comparisons after multisplit: MeanPool, AttentionMIL, TransformerMIL, HybridAttentionMIL")
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1303,7 +1347,7 @@ if fn_path.exists():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 sl = slide()
-section_divider(sl, 8, "Summary & Future Directions",
+section_divider(sl, 9, "Summary & Future Directions",
                 "What we learned and where to go next")
 
 # ─────────────────────────────────────────────────────────────────────────────
