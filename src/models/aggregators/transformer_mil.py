@@ -3,17 +3,21 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from src.models.aggregators.coord_encoder import CoordinateEncoder
+
 
 class TransformerMIL(nn.Module):
     """
     Transformer-based MIL aggregator matching the SurGen paper (giaf086).
 
     Architecture:
-      1. Linear projection: input_dim → proj_dim, followed by ReLU
-      2. Transformer encoder: n_layers layers, n_heads attention heads,
+      1. (Optional) Coordinate encoding: encode (x, y) → coord_embed_dim,
+         concatenate with patch embeddings before projection
+      2. Linear projection: (input_dim [+ coord_embed_dim]) → proj_dim, followed by ReLU
+      3. Transformer encoder: n_layers layers, n_heads attention heads,
          ffn_dim feedforward dimension, dropout, layer_norm_eps
-      3. Mean pooling across patches
-      4. Linear classifier → 1 logit
+      4. Mean pooling across patches
+      5. Linear classifier → 1 logit
     """
 
     def __init__(
@@ -25,10 +29,24 @@ class TransformerMIL(nn.Module):
         ffn_dim: int = 2048,
         dropout: float = 0.15,
         ln_eps: float = 1e-5,
+        use_coords: bool = False,
+        coord_hidden_dim: int = 32,
+        coord_embed_dim: int = 32,
     ):
         super().__init__()
+        self.use_coords = use_coords
+        if use_coords:
+            self.coord_encoder = CoordinateEncoder(
+                hidden_dim=coord_hidden_dim,
+                output_dim=coord_embed_dim,
+            )
+            effective_input_dim = input_dim + coord_embed_dim
+        else:
+            self.coord_encoder = None
+            effective_input_dim = input_dim
+
         self.projection = nn.Sequential(
-            nn.Linear(input_dim, proj_dim),
+            nn.Linear(effective_input_dim, proj_dim),
             nn.ReLU(),
         )
         encoder_layer = nn.TransformerEncoderLayer(
@@ -44,8 +62,12 @@ class TransformerMIL(nn.Module):
 
     def forward(self, x: torch.Tensor, coords=None) -> dict[str, torch.Tensor]:
         """
-        x: [N, D] patch embeddings for one slide
+        x:      [N, D] patch embeddings for one slide
+        coords: [N, 2] patch coordinates (required when use_coords=True)
         """
+        if self.use_coords:
+            coord_emb = self.coord_encoder(coords)   # [N, coord_embed_dim]
+            x = torch.cat([x, coord_emb], dim=-1)   # [N, D + coord_embed_dim]
         x = self.projection(x)           # [N, proj_dim]
         x = x.unsqueeze(0)               # [1, N, proj_dim]
         x = self.transformer(x)          # [1, N, proj_dim]

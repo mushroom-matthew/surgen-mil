@@ -97,6 +97,9 @@ def build_model(cfg):
             ffn_dim=cfg["model"].get("ffn_dim", 2048),
             dropout=cfg["model"].get("dropout", 0.15),
             ln_eps=cfg["model"].get("ln_eps", 1e-5),
+            use_coords=cfg["model"].get("use_coords", False),
+            coord_hidden_dim=cfg["model"].get("coord_hidden_dim", 32),
+            coord_embed_dim=cfg["model"].get("coord_embed_dim", 32),
         )
     else:
         raise ValueError(f"Unknown model: {model_name}")

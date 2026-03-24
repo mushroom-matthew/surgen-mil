@@ -1,0 +1,40 @@
+data:
+  root: /mnt/data-surgen
+  split_seed: 0
+  max_patches: 512      # random patch sampling, consistent with baselines
+  train_frac: 0.7
+  val_frac: 0.15
+
+model:
+  name: transformer_mil
+  input_dim: 1024
+  proj_dim: 512
+  n_layers: 2
+  n_heads: 2
+  ffn_dim: 2048
+  dropout: 0.15
+  ln_eps: 1.0e-5
+  use_coords: true
+  coord_hidden_dim: 32
+  coord_embed_dim: 32   # concatenated before projection: 1024+32 → 512
+
+optimizer:
+  lr: 1.0e-4
+  weight_decay: 0.0001
+
+loss:
+  name: bce
+  weighted: true
+
+training:
+  epochs: 50
+  seed: 42
+  min_epochs: 10
+  early_stopping_patience: 10
+  selection_metric: val_auprc
+  ema_alpha: 0.7
+  use_amp: true
+  use_best_checkpoint: true
+
+output:
+  dir: outputs/uni_transformer_spatial_fair
