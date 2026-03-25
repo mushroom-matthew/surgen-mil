@@ -36,7 +36,7 @@ Confusion matrices use seed-averaged predictions with Youden J threshold fit on 
 
 ## Observations
 
-1. All three models exceed the paper baseline AUROC of 0.827 in this three-seed, fixed-split comparison, consistent with frozen UNI embeddings providing useful discriminative signal for MSI/MMR status.
+1. MeanPool and AttentionMIL exceed the paper reference AUROC of 0.827 in this three-seed, fixed-split comparison, while the fair TransformerMIL reproduction does not. The broader conclusion is still that frozen UNI embeddings provide useful discriminative signal for MSI/MMR status.
 2. MeanPool achieves competitive AUROC with the lowest cross-seed variance, making it the most reproducible aggregator in this experiment.
 3. AttentionMIL shows higher cross-seed variance (±0.020) than MeanPool (±0.005). Whether this reflects training instability, signal absence in some seeds, or both is not directly resolved by this experiment. A direct test would compare held-out performance as a function of training set size or fix random initialisation while varying bag sampling.
 4. In this experiment, TopK-16 training improves AUPRC but reduces AUROC relative to full-bag AttentionMIL; neither configuration dominates across metrics.
@@ -51,15 +51,15 @@ apples-to-apples plots.
 
 | Model | AUROC (mean ± std) | AUPRC (mean ± std) | Interpretation |
 |-------|--------------------|--------------------|----------------|
-| HybridAttentionMIL (mean + 2 heads) | 0.903 ± 0.035 | 0.591 ± 0.058 | best overall performer |
-| AttentionMIL | 0.900 ± 0.032 | 0.532 ± 0.128 | strong mean AUROC, high AUPRC variance |
-| HybridAttentionMIL + coords | 0.897 ± 0.040 | 0.541 ± 0.074 | spatial encoding is effectively neutral here |
-| Gated AttentionMIL | 0.896 ± 0.040 | 0.516 ± 0.138 | competitive AUROC, unstable AUPRC |
-| MeanVar Pool | 0.895 ± 0.027 | 0.497 ± 0.084 | strong non-attention baseline |
-| AttentionMIL + coords | 0.882 ± 0.041 | 0.485 ± 0.146 | spatial coordinates hurt plain attention |
-| MeanPool | 0.877 ± 0.033 | 0.495 ± 0.050 | stable baseline, still competitive |
-| Spatial TransformerMIL | 0.859 ± 0.056 | 0.465 ± 0.115 | slight AUROC gain vs no-coords transformer, still poor/high-variance |
-| TransformerMIL (paper repro) | 0.850 ± 0.066 | 0.508 ± 0.123 | worst AUROC, highest variance |
+| HybridAttentionMIL (mean + 2 heads) | 0.903 ± 0.033 | 0.591 ± 0.054 | best overall performer |
+| AttentionMIL | 0.900 ± 0.030 | 0.532 ± 0.120 | strong mean AUROC, high AUPRC variance |
+| HybridAttentionMIL + coords | 0.897 ± 0.038 | 0.541 ± 0.069 | spatial encoding is effectively neutral here |
+| Gated AttentionMIL | 0.896 ± 0.037 | 0.516 ± 0.130 | competitive AUROC, unstable AUPRC |
+| MeanVar Pool | 0.895 ± 0.026 | 0.497 ± 0.079 | strong non-attention baseline |
+| AttentionMIL + coords | 0.882 ± 0.038 | 0.485 ± 0.138 | spatial coordinates hurt plain attention |
+| MeanPool | 0.877 ± 0.031 | 0.495 ± 0.047 | stable baseline, still competitive |
+| Spatial TransformerMIL | 0.859 ± 0.053 | 0.465 ± 0.108 | slight AUROC gain vs no-coords transformer, still poor/high-variance |
+| TransformerMIL (paper repro) | 0.850 ± 0.062 | 0.508 ± 0.116 | worst AUROC, highest variance |
 
 ### Multi-Split Interpretation
 
@@ -213,3 +213,9 @@ Regenerate with `python scripts/appendix_tables.py --out outputs/appendix_tables
   available.
 - Single site: results may not generalise to slides from different scanners or staining protocols.
 - No external validation: all evaluation is on held-out cases from the same cohort distribution.
+- No significance testing: results are summarised as mean ± std across a small number of seeds and
+  splits; confidence intervals and formal paired significance tests are not yet reported.
+- Limited split count: multisplit evaluation across `{0,1,2}` is stronger than a single split, but
+  it is not full repeated nested cross-validation.
+- No dynamic-vs-fixed bag-sampling ablation: the repository uses dynamic train-time re-sampling by
+  default, but does not yet directly compare that against a fixed sampled bag per run.

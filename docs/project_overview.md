@@ -43,13 +43,18 @@ Three aggregation strategies are evaluated under fair, controlled conditions:
 
 ## Core Result
 
-Frozen UNI embeddings contain strong discriminative signal for MSI/MMR prediction (all models
-exceed the Myles et al. paper baseline of AUROC 0.827 in this comparison). Mean pooling is the
-most stable baseline — lowest cross-seed variance with competitive mean AUROC. AttentionMIL is
-competitive but seed-sensitive (4× higher AUROC variance than MeanPool in this experiment).
-TransformerMIL, with 6.8M parameters, produced the lowest mean AUROC and highest variance in
-this three-seed, single-split comparison; added model capacity did not translate to improved
-performance under weak supervision at this dataset scale.
+Frozen UNI embeddings contain strong discriminative signal for MSI/MMR prediction. In the fixed
+split fair comparison, MeanPool and AttentionMIL exceed the Myles et al. paper reference AUROC of
+0.827, while the fair TransformerMIL reproduction does not. Mean pooling is the most stable
+baseline — lowest cross-seed variance with competitive mean AUROC. AttentionMIL is competitive but
+seed-sensitive (4× higher AUROC variance than MeanPool in this experiment). TransformerMIL, with
+6.8M parameters, produced the lowest mean AUROC and highest variance in this three-seed,
+single-split comparison; added model capacity did not translate to improved performance under weak
+supervision at this dataset scale.
+
+The stronger overall summary comes from the multisplit evaluation (3 split seeds × 3 training
+seeds), where `HybridAttentionMIL` becomes the best model at 0.903 ± 0.033 AUROC and
+0.591 ± 0.054 AUPRC.
 
 See `docs/results_summary.md` for the full performance table and interpretation.
 

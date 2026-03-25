@@ -77,10 +77,10 @@ No strong prior exists for which of these will help at this scale; empirical abl
 `HybridAttentionMIL` (mean pooling + two independent attention heads + optional diversity penalty)
 has now been evaluated across the full 3-split × 3-seed multisplit grid. The current summary is:
 
-- `HybridAttentionMIL`: AUROC `0.903 ± 0.035`, AUPRC `0.591 ± 0.058` — best overall model
-- `HybridAttentionMIL + coords`: AUROC `0.897 ± 0.040`, AUPRC `0.541 ± 0.074` — essentially neutral
+- `HybridAttentionMIL`: AUROC `0.903 ± 0.033`, AUPRC `0.591 ± 0.054` — best overall model
+- `HybridAttentionMIL + coords`: AUROC `0.897 ± 0.038`, AUPRC `0.541 ± 0.069` — essentially neutral
   relative to the non-spatial hybrid
-- `AttentionMIL`: AUROC `0.900 ± 0.032`, AUPRC `0.532 ± 0.128`
+- `AttentionMIL`: AUROC `0.900 ± 0.030`, AUPRC `0.532 ± 0.120`
 
 So the framing should now be decisive rather than tentative: the hybrid architecture is the
 current multisplit winner, and mean-pool anchoring improves robustness enough to justify treating
@@ -190,8 +190,8 @@ result is a strong signal that a full transformer encoder over the patch sequenc
 natural next step.
 
 The current transformer evidence should narrow that claim. Plain `TransformerMIL` is weak on the
-multisplit benchmark (`0.850 ± 0.066` AUROC), and adding the current MLP coordinate encoder only
-nudges it to `0.859 ± 0.056` while leaving variance high. So "move to a transformer next" is not
+multisplit benchmark (`0.850 ± 0.062` AUROC), and adding the current MLP coordinate encoder only
+nudges it to `0.859 ± 0.053` while leaving variance high. So "move to a transformer next" is not
 the right operational recommendation. The more defensible path is:
 
 1. Use `HybridAttentionMIL` as the strong baseline.
@@ -246,3 +246,26 @@ performance; it is the standard a transformer variant now has to beat.
   learned absolute-position embedding is too weak. Future spatial work should prefer stronger
   inductive bias: structured positional encodings, region-level aggregation, or architectures that
   model neighbourhood structure explicitly.
+
+## G: Remaining Gaps And Scope-Limited Limitations
+
+These are the main open items that were not reconciled because they require additional experiments
+or broader project scope rather than quick documentation cleanup:
+
+- **External validation**: all reported results come from held-out SurGen cases. A third-cohort or
+  cross-site evaluation is the most important missing robustness check.
+- **Patch-level validation**: attention maps and clustering analyses remain hypothesis-generating
+  because there is no patch-level annotation or pathologist-reviewed ROI benchmark in the repo.
+- **Statistical uncertainty**: mean ± std is reported, but there are no confidence intervals,
+  paired bootstrap tests, or formal significance tests between models.
+- **Limited CV depth**: the multisplit protocol uses three split seeds and three training seeds.
+  This is materially better than a single split, but still short of repeated nested CV.
+- **Bag sampling ablation depth**: the code documents dynamic train-time re-sampling, but does not
+  yet isolate whether dynamic sampling itself is better than fixing one sampled bag per slide per
+  run.
+- **Upstream pipeline omission**: this repository begins from precomputed UNI embeddings. It does
+  not include raw WSI tiling, stain normalization, or feature extraction, so those stages are held
+  fixed rather than evaluated.
+- **Deployment scope**: temperature scaling and thresholding are implemented, but no operational
+  study exists for threshold selection under a clinical prevalence shift, workflow constraints, or
+  downstream reviewer-in-the-loop use.

@@ -26,7 +26,8 @@ data scale (see Main Findings table below).
 ![Confusion matrices](docs/figures/fair_comparison_confusion_matrices.png)
 
 - **Frozen UNI embeddings are strongly discriminative** for MSI/MMR status without any fine-tuning:
-  all models exceed the paper baseline AUROC of 0.827 on this split.
+  MeanPool and AttentionMIL exceed the paper reference AUROC of 0.827 on this split, while the
+  fair TransformerMIL reproduction does not.
 - **Mean pooling is the most stable baseline**: lowest cross-seed AUROC variance (±0.005),
   consistent performance across all three seeds.
 - **AttentionMIL is competitive but seed-dependent**: matched or exceeded MeanPool in some runs,
@@ -37,6 +38,8 @@ data scale (see Main Findings table below).
 - **Sparse evidence selection (top-k attention)** improves AUPRC in this experiment (0.455 vs
   0.381) but reduces AUROC (0.853 vs 0.869); not robustly superior overall. See Appendix C
   in `docs/appendix.md`.
+- **Multisplit evaluation is the stronger summary**: across 3 data splits × 3 seeds, the best
+  model is `HybridAttentionMIL` at 0.903 ± 0.033 AUROC and 0.591 ± 0.054 AUPRC.
 
 ---
 

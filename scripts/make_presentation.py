@@ -635,16 +635,16 @@ bullet_list(sl, [
 sl = slide()
 bg(sl)
 header_bar(sl, "Main Results: Slide-Level Performance",
-           "Mean ± std across 3 seeds · All models exceed paper baseline AUROC 0.827")
+           "Mean ± std across 3 seeds · Paper baseline AUROC 0.827 shown for reference")
 
 # Table
 headers = ["Model", "Params", "AUROC (mean ± std)", "AUPRC (mean ± std)", "Interpretation"]
 rows = [
-    ["MeanPool", "262K", "0.860 ± 0.005", "0.406 ± 0.019",
+    ["MeanPool", "262K", "0.860 ± 0.005", "0.447 ± 0.019",
      "Most stable · lowest variance · strong linear probe"],
-    ["AttentionMIL", "394K", "0.869 ± 0.020", "0.420 ± 0.032",
+    ["AttentionMIL", "394K", "0.869 ± 0.020", "0.381 ± 0.052",
      "Marginally higher mean · 4× variance · seed-dependent"],
-    ["TransformerMIL\n(paper repro)", "6.8M", "0.806 ± 0.057", "0.349 ± 0.072",
+    ["TransformerMIL\n(paper repro)", "6.8M", "0.806 ± 0.057", "0.391 ± 0.116",
      "Lowest AUROC · highest variance · likely overfitting"],
     ["Paper baseline", "6.8M", "0.827 (reported)", "—",
      "Different split — reference only"],
@@ -1089,23 +1089,23 @@ header_bar(sl, "Multi-Split Results — All Models",
 # Table data — ranked by AUROC
 ms_headers = ["Model", "AUROC (mean ± std)", "AUPRC (mean ± std)", "Notes"]
 ms_rows = [
-    ["HybridAttentionMIL\n(mean + 2 heads)", "0.903 ± 0.035", "0.591 ± 0.058",
+    ["HybridAttentionMIL\n(mean + 2 heads)", "0.903 ± 0.033", "0.591 ± 0.054",
      "★ Best overall — highest AUROC and AUPRC"],
-    ["AttentionMIL", "0.900 ± 0.032", "0.532 ± 0.128",
-     "Strong but high AUPRC variance (±0.128)"],
-    ["Hybrid + Spatial", "0.897 ± 0.040", "0.541 ± 0.074",
+    ["AttentionMIL", "0.900 ± 0.030", "0.532 ± 0.120",
+     "Strong but high AUPRC variance (±0.120)"],
+    ["Hybrid + Spatial", "0.897 ± 0.038", "0.541 ± 0.069",
      "Coords add little over non-spatial hybrid"],
-    ["Gated AttentionMIL", "0.896 ± 0.040", "0.516 ± 0.138",
+    ["Gated AttentionMIL", "0.896 ± 0.037", "0.516 ± 0.130",
      "Gating mechanism — higher AUPRC variance"],
-    ["MeanVar Pool", "0.895 ± 0.027", "0.497 ± 0.084",
+    ["MeanVar Pool", "0.895 ± 0.026", "0.497 ± 0.079",
      "Mean + variance — stable, no attention needed"],
-    ["Attention + Spatial", "0.882 ± 0.041", "0.485 ± 0.146",
+    ["Attention + Spatial", "0.882 ± 0.038", "0.485 ± 0.138",
      "Coords hurt: underperforms plain attention"],
-    ["MeanPool", "0.877 ± 0.033", "0.495 ± 0.050",
+    ["MeanPool", "0.877 ± 0.031", "0.495 ± 0.047",
      "Most stable AUPRC — reliable baseline"],
-    ["Spatial TransformerMIL", "0.859 ± 0.056", "0.465 ± 0.115",
+    ["Spatial TransformerMIL", "0.859 ± 0.053", "0.465 ± 0.108",
      "Slight AUROC gain vs no-coords transformer; still poor and high-variance"],
-    ["TransformerMIL\n(paper repro)", "0.850 ± 0.066", "0.508 ± 0.123",
+    ["TransformerMIL\n(paper repro)", "0.850 ± 0.062", "0.508 ± 0.116",
      "Worst AUROC, highest variance — overfitting"],
 ]
 ms_col_ws = [2.8, 2.2, 2.2, 4.75]
@@ -1152,7 +1152,7 @@ for i, (row, rc) in enumerate(zip(ms_rows, row_bgs)):
 sl = slide()
 bg(sl)
 header_bar(sl, "The Winner: HybridAttentionMIL",
-           "Best overall multisplit result: AUPRC 0.591 ± 0.058, AUROC 0.903 ± 0.035")
+           "Best overall multisplit result: AUPRC 0.591 ± 0.054, AUROC 0.903 ± 0.033")
 
 txbox(sl, "Architecture", 0.35, 1.35, 5.9, 0.38,
       font_size=16, bold=True, color=NAVY)
@@ -1178,9 +1178,9 @@ bullet_list(sl, [
 txbox(sl, "Multisplit results", 6.6, 1.35, 6.38, 0.38,
       font_size=16, bold=True, color=GREEN)
 bullet_list(sl, [
-    ("AUPRC:", "0.591 ± 0.058 — best overall and the metric to emphasise under class imbalance"),
-    ("AUROC:", "0.903 ± 0.035 — also best overall, so the winner does not depend on the metric"),
-    ("AUPRC variance:", "±0.058 vs ±0.128 for plain AttentionMIL — the hybrid is not just better on average, it is markedly more stable on the positive-class metric"),
+    ("AUPRC:", "0.591 ± 0.054 — best overall and the metric to emphasise under class imbalance"),
+    ("AUROC:", "0.903 ± 0.033 — also best overall, so the winner does not depend on the metric"),
+    ("AUPRC variance:", "±0.054 vs ±0.120 for plain AttentionMIL — the hybrid is not just better on average, it is markedly more stable on the positive-class metric"),
     ("vs. AttentionMIL:", "AUPRC +0.059, AUROC +0.003, with much tighter AUPRC spread after adding a second head plus the mean branch"),
     ("Interpretation:", "Multiple heads are helping, but the next question is whether they are learning genuinely different morphologies or just a better optimization path"),
 ], l=6.6, t=1.82, w=6.38, h=5.5, font_size=15)
@@ -1215,15 +1215,15 @@ rect(sl, 4.55, 1.28, 0.04, 5.9, fill=RGBColor(0xCC, 0xCC, 0xCC))  # divider
 txbox(sl, "Multisplit results", 4.75, 1.28, 4.15, 0.38,
       font_size=14, bold=True, color=NAVY)
 bullet_list(sl, [
-    ("Attention + coords:", "AUROC 0.882 ± 0.041 — worse than plain (0.900 ± 0.032). "
-     "AUPRC variance explodes. Spatial signal conflicts with position-agnostic "
+    ("Attention + coords:", "AUROC 0.882 ± 0.038 — worse than plain (0.900 ± 0.030). "
+     "AUPRC variance remains high. Spatial signal conflicts with position-agnostic "
      "attention scoring; the head cannot easily decouple location from content."),
-    ("Hybrid + coords:", "AUROC 0.897 ± 0.040 vs 0.903 ± 0.035 non-spatial — "
+    ("Hybrid + coords:", "AUROC 0.897 ± 0.038 vs 0.903 ± 0.033 non-spatial — "
      "essentially identical. Mean pool component absorbs the spatial noise, "
      "explaining why the hybrid is more robust to the addition."),
-    ("Transformer (no coords):", "AUROC 0.850 ± 0.066, AUPRC 0.508 ± 0.123 — "
+    ("Transformer (no coords):", "AUROC 0.850 ± 0.062, AUPRC 0.508 ± 0.116 — "
      "worst AUROC and highest variance overall."),
-    ("Spatial TransformerMIL:", "AUROC 0.859 ± 0.056, AUPRC 0.465 ± 0.115 — "
+    ("Spatial TransformerMIL:", "AUROC 0.859 ± 0.053, AUPRC 0.465 ± 0.108 — "
      "slightly better AUROC than no-coords, but still poor and high-variance. "
      "The MLP coordinate branch does not rescue transformer instability."),
 ], l=4.75, t=1.72, w=4.15, h=5.55, font_size=12)
@@ -1364,13 +1364,13 @@ findings = [
      "Representation quality of the foundation model is the dominant factor.",
      TEAL),
     ("2", "Hybrid attention is the clear multi-split winner",
-     "HybridAttentionMIL (mean + 2 heads) achieves AUROC 0.903 ± 0.035 and AUPRC 0.591 ± 0.058 "
+     "HybridAttentionMIL (mean + 2 heads) achieves AUROC 0.903 ± 0.033 and AUPRC 0.591 ± 0.054 "
      "— best across all 9 models. Combining mean pooling with learned attention heads "
      "improves both performance and stability.",
      GREEN),
     ("3", "Complexity does not consistently win",
-     "TransformerMIL underperforms (AUROC 0.850 ± 0.066), and adding MLP spatial coordinates "
-     "only nudges it to 0.859 ± 0.056 while leaving variance high. Spatial coordinates hurt "
+     "TransformerMIL underperforms (AUROC 0.850 ± 0.062), and adding MLP spatial coordinates "
+     "only nudges it to 0.859 ± 0.053 while leaving variance high. Spatial coordinates hurt "
      "attention but are neutral for the hybrid. "
      "Data quality (leakage, label reconciliation) had larger impact than model choice.",
      NAVY),
@@ -1406,7 +1406,7 @@ bullet_list(sl, [
     "HybridAttentionMIL validated ✓ — next: head count ablation (1/2/4/6), "
      "diversity penalty tuning, attention collapse diagnostics",
     "Spatial TransformerMIL did not rescue instability with an MLP coord encoder "
-     "(AUROC 0.859 ± 0.056) — next spatial tests should use stronger priors",
+     "(AUROC 0.859 ± 0.053) — next spatial tests should use stronger priors",
     "Alternative spatial encodings: sinusoidal 2D positional embeddings, "
      "learned grid embeddings, RoPE-style rotary encodings applied to patch coords — "
      "the MLP coordinate encoder is a simple baseline, not the final answer",

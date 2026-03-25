@@ -16,3 +16,4 @@ outputs/**/*.pt
 .env
 .DS_Store
 *.egg-info/
+INTERVIEW_CHEAT_SHEET.md
