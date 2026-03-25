@@ -41,6 +41,21 @@ Confusion matrices use seed-averaged predictions with Youden J threshold fit on 
 3. AttentionMIL shows higher cross-seed variance (±0.020) than MeanPool (±0.005). Whether this reflects training instability, signal absence in some seeds, or both is not directly resolved by this experiment. A direct test would compare held-out performance as a function of training set size or fix random initialisation while varying bag sampling.
 4. In this experiment, TopK-16 training improves AUPRC but reduces AUROC relative to full-bag AttentionMIL; neither configuration dominates across metrics.
 
+### Why A Better Confusion Matrix Can Coexist With Worse PRC
+
+A confusion matrix is tied to one specific threshold. Precision-recall curves and AUPRC summarize
+performance across *all* thresholds. That means an architecture can look better at the chosen
+operating point, for example after fitting a Youden J threshold on validation, while still ranking
+positives below negatives less consistently over the full score range.
+
+In practice, this usually means:
+
+- the model has a stronger operating point near one threshold
+- but its overall probability ordering is less clean across the rest of the curve
+
+So a model can have a better confusion matrix at the selected threshold and still have worse AUPRC.
+These are not contradictory findings; they answer different questions.
+
 ## Multi-Split Comparison
 
 To reduce dependence on any single case-grouped partition, the mainline models were also evaluated
