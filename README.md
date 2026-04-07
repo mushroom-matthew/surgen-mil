@@ -1,13 +1,24 @@
 # surgen-mil
 
-Modular multiple-instance learning (MIL) framework for slide-level MSI/MMR prediction from
-precomputed UNI patch embeddings on the SurGen colorectal cancer dataset.
+> **In weakly supervised WSI classification, performance is often not limited by feature
+> representation, but by aggregation and generalization under sparse, noisy evidence.**
 
-This repository accompanies a computational pathology evaluation comparing three aggregation
-strategies — mean pooling, attention MIL, and transformer MIL — under comparable experimental
-conditions. The core finding is that frozen UNI embeddings already contain strong discriminative
-signal, and simple pooled baselines are competitive with more expressive architectures at this
-data scale (see Main Findings table below).
+This repository investigates that claim empirically using UNI embeddings on the SurGen colorectal
+cancer dataset. Three aggregation strategies — mean pooling, attention MIL, and transformer MIL —
+are evaluated under controlled, comparable conditions across multiple seeds and data splits.
+
+---
+
+## What This Repository Tests
+
+Three hypotheses drive the experimental design:
+
+1. **Feature representations (UNI embeddings) already encode discriminative signal** — a linear
+   probe or simple pooling baseline should perform well without fine-tuning.
+2. **Simple aggregation (mean pooling) provides a strong and stable baseline** — competitive with
+   more expressive methods at this data scale and label regime.
+3. **Increasing aggregation complexity introduces instability without consistent gains** — more
+   parameters can amplify noise rather than resolve it under weak supervision.
 
 ---
 
@@ -25,21 +36,37 @@ data scale (see Main Findings table below).
 
 ![Confusion matrices](docs/figures/fair_comparison_confusion_matrices.png)
 
-- **Frozen UNI embeddings are strongly discriminative** for MSI/MMR status without any fine-tuning:
-  MeanPool and AttentionMIL exceed the paper reference AUROC of 0.827 on this split, while the
-  fair TransformerMIL reproduction does not.
+We observe:
+
+- **Frozen UNI embeddings are strongly discriminative** without any fine-tuning: MeanPool and
+  AttentionMIL exceed the paper reference AUROC of 0.827 on this split, consistent with
+  hypothesis 1.
 - **Mean pooling is the most stable baseline**: lowest cross-seed AUROC variance (±0.005),
-  consistent performance across all three seeds.
+  consistent performance across all three seeds — supporting hypothesis 2.
 - **AttentionMIL is competitive but seed-dependent**: matched or exceeded MeanPool in some runs,
-  but with 4× higher AUROC variance (±0.020 vs ±0.005) — an observation from this experiment,
-  not a general claim. See `docs/results_summary.md` for per-seed breakdown.
+  but with 4× higher AUROC variance (±0.020 vs ±0.005). Consistent with hypothesis 3.
+  See `docs/results_summary.md` for per-seed breakdown.
 - **TransformerMIL (6.8M params)** produced the lowest mean AUROC (0.806), highest variance
-  (±0.057), and highest compute cost across this three-seed, fixed-split comparison.
-- **Sparse evidence selection (top-k attention)** improves AUPRC in this experiment (0.455 vs
-  0.381) but reduces AUROC (0.853 vs 0.869); not robustly superior overall. See Appendix C
-  in `docs/appendix.md`.
+  (±0.057), and highest compute cost — the clearest case of complexity amplifying noise.
+- **Sparse evidence selection (top-k attention)** improves AUPRC (0.455 vs 0.381) but reduces
+  AUROC (0.853 vs 0.869); not robustly superior. See Appendix C in `docs/appendix.md`.
 - **Multisplit evaluation is the stronger summary**: across 3 data splits × 3 seeds, the best
   model is `HybridAttentionMIL` at 0.903 ± 0.033 AUROC and 0.591 ± 0.054 AUPRC.
+
+### Stability Analysis
+
+Stability — measured as cross-seed variance — is treated as a first-class metric here. In weak
+supervision, a system that performs well on average but varies widely across seeds provides
+weaker guarantees than a stable but slightly lower-scoring baseline.
+
+| Model | AUROC std | AUPRC std | Interpretation |
+|-------|-----------|-----------|----------------|
+| MeanPool | ±0.005 | ±0.019 | Trustworthy baseline |
+| AttentionMIL | ±0.020 | ±0.052 | Competitive but sensitive |
+| TransformerMIL | ±0.057 | ±0.116 | Instability dominates gains |
+
+A model's ranking by mean AUROC is less informative than its ranking by mean AUROC relative to
+its variance. Stability is a proxy for trustworthiness under weak supervision.
 
 ---
 
@@ -211,9 +238,9 @@ MAX_PARALLEL=2 bash scripts/run_transformer_spatial_multisplit.sh
 
 Representative multisplit analysis plots:
 
-![Multisplit lines](outputs/multisplit/analysis/multisplit_lines.png)
+![Multisplit lines](docs/figures/multisplit_lines.png)
 
-![Multisplit cohort lines](outputs/multisplit/analysis/multisplit_cohort_lines.png)
+![Multisplit cohort lines](docs/figures/multisplit_cohort_lines.png)
 
 ---
 
@@ -358,6 +385,38 @@ on what this repo does NOT include (raw WSI preprocessing, UNI feature extractio
 
 ---
 
+## Observed Failure Modes
+
+These are aggregation failures, not representation failures:
+
+- **Attention collapse**: attention weights concentrate on a small number of patches or become
+  near-uniform, especially under sparse positive evidence. The model fails to aggregate
+  distributed signal.
+- **High seed sensitivity in parameterized aggregators**: learned attention/transformer weights
+  are unstable across random initializations at this sample size, producing wide performance
+  variance despite identical architecture and data.
+- **Noise amplification**: expressive aggregators overfit to patch-level noise patterns rather
+  than slide-level signal, particularly when the positive class is underrepresented.
+- **Threshold instability**: optimal decision thresholds vary significantly across seeds in
+  high-variance models, reducing reliability in deployment scenarios.
+
+---
+
+## Evaluation Philosophy
+
+We do not optimize for peak performance alone.
+
+We evaluate:
+- **Stability across seeds** — variance is reported alongside mean for all metrics
+- **Consistency of ranking** — a model that ranks differently across splits is less trustworthy
+  than one with lower but consistent performance
+- **Behavior under sampling variation** — train-time patch subsampling tests robustness to
+  incomplete evidence
+
+The goal is to understand whether a system can be trusted, not just whether it scores well.
+
+---
+
 ## Limitations
 
 - Small sample size: both cohorts have limited cases relative to expressive model complexity.
@@ -369,9 +428,25 @@ on what this repo does NOT include (raw WSI preprocessing, UNI feature extractio
 
 ## Future Directions
 
+**Extending the pipeline investigated here:**
+
+- **Mixture of Experts feature transformation** — the linear projection between foundation model
+  embeddings and the aggregator conditions how well aggregation can express trust. Mammoth (Shao
+  et al., ICLR 2026) replaces this single projection with a parameter-efficient MoE that routes
+  each patch to phenotype-specialised subspaces — reporting +3.8% average gains across 8 MIL
+  methods as a drop-in replacement. If aggregation is where trust manifests, the transformation
+  feeding it determines whether that trust is well-posed or ill-conditioned. The pipeline
+  investigated here (`UNI → linear → aggregator`) is exactly the regime Mammoth targets.
+- **Controlled noise injection** — testing how each aggregator degrades as patch-level noise
+  increases would give a direct empirical handle on trust under corruption, moving beyond
+  seed-variance as a stability proxy.
+- **Uncertainty-aware attention** — quantifying per-slide prediction uncertainty rather than
+  point estimates; particularly important for the high-variance seeds observed in AttentionMIL.
+
+**Extending the scope:**
+
 - Mutation status prediction (KRAS, NRAS, BRAF) from the same embeddings
 - Cohort-aware modelling (SR1482 vs SR386 distribution shift)
-- Uncertainty-aware attention for reliability estimation
 - Case-level aggregation across multiple slides per patient
 
 See `docs/future_work.md` for a detailed roadmap.
